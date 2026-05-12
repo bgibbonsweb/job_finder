@@ -2,6 +2,9 @@ const http = require('http');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const pdfParse = require('pdf-parse');
+const { Document } = require('docx');
+const Busboy = require('busboy');
 const { normalizeBookmarksData: normalizeBookmarksDataComponent } = require('./server/components/bookmarks');
 const {
   normalizeResumeText: normalizeResumeTextComponent,
@@ -5925,6 +5928,62 @@ function normalizeResumeText(text) {
   return normalizeResumeTextComponent(text);
 }
 
+async function extractTextFromFile(buffer, mimeType, fileName) {
+  const lowerMimeType = String(mimeType || '').toLowerCase();
+  const lowerFileName = String(fileName || '').toLowerCase();
+
+  // PDF
+  if (lowerMimeType.includes('pdf') || lowerFileName.endsWith('.pdf')) {
+    try {
+      const pdfData = await pdfParse(buffer);
+      return (pdfData.text || '').trim();
+    } catch (error) {
+      console.error('[resume] PDF extraction error:', error.message);
+      throw new Error('Failed to extract text from PDF');
+    }
+  }
+
+  // Word (.docx)
+  if (lowerMimeType.includes('word') || lowerMimeType.includes('vnd.openxmlformats-officedocument.wordprocessingml') ||
+      lowerFileName.endsWith('.docx')) {
+    try {
+      const doc = await Document.fromBuffer(buffer);
+      const paragraphs = [];
+      for (const section of doc.sections) {
+        for (const element of section.children) {
+          if (element.text) {
+            paragraphs.push(element.text);
+          }
+        }
+      }
+      const text = paragraphs.join('\n');
+      return text.trim();
+    } catch (error) {
+      console.error('[resume] DOCX extraction error:', error.message);
+      throw new Error('Failed to extract text from Word document');
+    }
+  }
+
+  // Plain text
+  if (lowerMimeType.includes('text') || lowerFileName.endsWith('.txt')) {
+    try {
+      const text = buffer.toString('utf-8');
+      return text.trim();
+    } catch (error) {
+      console.error('[resume] Text extraction error:', error.message);
+      throw new Error('Failed to extract text from file');
+    }
+  }
+
+  // Try UTF-8 decoding as fallback for unknown types
+  try {
+    const text = buffer.toString('utf-8');
+    return text.trim();
+  } catch (error) {
+    throw new Error('Unsupported file format. Please upload a PDF, Word document, or plain text file.');
+  }
+}
+
 function splitResumeSentences(text) {
   return String(text || '')
     .replace(/\r\n/g, '\n')
@@ -8574,6 +8633,102 @@ async function handleResumesApi(req, res) {
   }
 
   if (req.method === 'POST') {
+    const contentType = String(req.headers['content-type'] || '').toLowerCase();
+
+    // Handle multipart/form-data (file uploads)
+    if (contentType.includes('multipart/form-data')) {
+      const bb = Busboy({ headers: req.headers });
+      let fileName = '';
+      let fileBuffer = Buffer.alloc(0);
+      let resumeName = '';
+      let hasFile = false;
+
+      bb.on('file', (fieldname, file, info) => {
+        if (fieldname === 'file' || fieldname === 'resume') {
+          hasFile = true;
+          fileName = info.filename;
+          const chunks = [];
+          file.on('data', (data) => {
+            chunks.push(data);
+          });
+          file.on('end', () => {
+            fileBuffer = Buffer.concat(chunks);
+          });
+        }
+      });
+
+      bb.on('field', (fieldname, val) => {
+        if (fieldname === 'name' || fieldname === 'resumeName') {
+          resumeName = String(val || '').trim();
+        }
+      });
+
+      bb.on('close', async () => {
+        try {
+          if (!hasFile) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'No file provided' }));
+            return;
+          }
+
+          const mimeType = String(contentType || '').split(';')[0].trim();
+          const text = await extractTextFromFile(fileBuffer, mimeType, fileName);
+          const normalizedText = normalizeResumeText(text);
+          
+          if (!normalizedText) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Resume file is empty or could not be parsed' }));
+            return;
+          }
+
+          const name = buildProfileLabelFromText(normalizedText, resumeName || String(fileName || 'Uploaded Resume').replace(/\.[^.]+$/, '').trim() || 'Uploaded Resume');
+          const sourceName = String(fileName || 'Upload').trim() || 'Upload';
+          const baseId = slugify(name || sourceName || 'resume') || 'resume';
+          const id = `${baseId}-${Date.now().toString(36)}`;
+          const next = {
+            resumes: [...(resumeLibraryData.resumes || []), normalizeResumeRecord({
+              id,
+              name,
+              text: normalizedText,
+              sourceName,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            })],
+          };
+          persistResumeLibraryForUser(authUser.id, next);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            status: 'saved',
+            resume: {
+              id,
+              name,
+              sourceName,
+              createdAt: next.resumes[next.resumes.length - 1].createdAt,
+              updatedAt: next.resumes[next.resumes.length - 1].updatedAt,
+              type: 'uploaded',
+            },
+          }));
+        } catch (err) {
+          console.error('[resumes] Error saving resume from file:', err.message);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message || 'Failed to process resume file' }));
+        }
+      });
+
+      bb.on('error', (err) => {
+        console.error('[resumes] Busboy error:', err.message);
+        if (!res.headersSent) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to parse file upload' }));
+        }
+      });
+
+      req.pipe(bb);
+      return;
+    }
+
+    // Handle application/json (plain text resume)
     let body = '';
     req.on('data', (chunk) => {
       body += chunk.toString();

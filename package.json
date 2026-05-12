@@ -17,7 +17,10 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "busboy": "^1.6.0",
+    "docx": "^9.6.1",
     "dotenv": "^16.0.3",
+    "pdf-parse": "^2.4.5",
     "pg": "^8.11.3"
   },
   "devDependencies": {
