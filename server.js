@@ -3699,6 +3699,302 @@ async function fetchDiceJobs() {
   }
 }
 
+// ─── TaskRabbit (Service Professionals & Trades) ────────────────────────────
+
+function normalizeTaskRabbitJob(task) {
+  const title = String(task?.category || 'Service Task').trim() || 'Service Task';
+  const location = String(task?.service_area || 'Multiple Locations').trim() || 'Multiple Locations';
+  const budget = task?.budget ? `$${task.budget}` : '';
+  const description = String(task?.description || '').trim();
+
+  const sourceText = [title, location, description, budget].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `taskrabbit_${task?.id || slugify(title + location)}`,
+    title: `${title} (Task)`,
+    company: 'TaskRabbit',
+    locations: [location],
+    remotePreferences: [],
+    jobTypes: [title, ...(budget ? [budget] : [])],
+    datePosted: task?.posted_date ? String(task.posted_date).slice(0, 10) : null,
+    logo: null,
+    url: task?.task_url || 'https://www.taskrabbit.com/find-a-service',
+    source: 'taskrabbit',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'small',
+  });
+}
+
+async function fetchTaskRabbitJobs() {
+  try {
+    // TaskRabbit's public API lists available tasks/services.
+    // Scraping/API access would require authentication, so returning placeholder.
+    // Real implementation would use their API: https://www.taskrabbit.com/api
+    console.log('[taskrabbit] 0 jobs (API requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[taskrabbit] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Craigslist Services & Gigs (Web Scraping) ──────────────────────────────
+
+function normalizeCraigslistJob(posting) {
+  const title = String(posting?.title || 'Service').trim() || 'Service';
+  const location = String(posting?.location || 'Bay Area').trim() || 'Bay Area';
+  const postedText = String(posting?.posted || '').trim();
+  const description = String(posting?.body || '').substring(0, 500);
+
+  const sourceText = [title, location, description].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `craigslist_${posting?.pid || slugify(title + location + postedText)}`,
+    title,
+    company: 'Craigslist Service Provider',
+    locations: [location],
+    remotePreferences: [],
+    jobTypes: ['Gig', 'Service'],
+    datePosted: postedText ? postedText.slice(0, 10) : null,
+    logo: null,
+    url: posting?.url || 'https://www.craigslist.org/search/ggg',
+    source: 'craigslist',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'startup',
+  });
+}
+
+async function fetchCraigslistJobs() {
+  try {
+    // Craigslist allows light scraping for search results.
+    // Scraping from multiple cities' services & gigs categories.
+    const cities = ['sfbay', 'nyc', 'la', 'chi', 'hou', 'philly', 'denver', 'austin', 'seattle', 'portland'];
+    const all = [];
+
+    for (const city of cities) {
+      try {
+        // Fetch services/gigs category JSON feed
+        const r = await fetch(`https://${city}.craigslist.org/search/ggg?format=rss`, {
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
+
+        if (!r.ok) continue;
+        const text = await r.text();
+
+        // Simple regex to extract titles and URLs from RSS
+        const titleMatches = text.match(/<title>([^<]+)<\/title>/g) || [];
+        const linkMatches = text.match(/<link>([^<]+)<\/link>/g) || [];
+
+        for (let i = 0; i < Math.min(titleMatches.length, linkMatches.length); i += 1) {
+          const title = titleMatches[i].replace(/<title>|<\/title>/g, '').trim();
+          const url = linkMatches[i].replace(/<link>|<\/link>/g, '').trim();
+
+          if (title && title !== 'craigslist') {
+            all.push({
+              title,
+              location: city,
+              url,
+              pid: slugify(title + url),
+              posted: new Date().toISOString().slice(0, 10),
+            });
+          }
+        }
+      } catch {
+        // Continue with next city
+      }
+    }
+
+    const normalized = all.map(normalizeCraigslistJob).filter((job) => job.id && job.title);
+    console.log(`[craigslist] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[craigslist] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Angie's List (Home Services Professionals) ──────────────────────────────
+
+function normalizeAngiesListJob(pro) {
+  const name = String(pro?.name || 'Professional').trim() || 'Professional';
+  const service = String(pro?.service || 'Home Service').trim() || 'Home Service';
+  const location = String(pro?.service_area || 'Multiple Locations').trim() || 'Multiple Locations';
+  const title = `${service} Professional: ${name}`;
+
+  const sourceText = [title, location, String(pro?.bio || '')].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `angieslist_${pro?.id || slugify(name + service)}`,
+    title,
+    company: name,
+    locations: [location],
+    remotePreferences: [],
+    jobTypes: [service, 'Licensed', 'Vetted'],
+    datePosted: null,
+    logo: pro?.photo_url || null,
+    url: pro?.profile_url || 'https://www.angieslist.com/companylist/us/all/all-services/companies.htm',
+    source: 'angieslist',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'small',
+  });
+}
+
+async function fetchAngiesListJobs() {
+  try {
+    // Angie's List requires scraping or API access with credentials.
+    // Public endpoint is rate-limited and requires user-agent spoofing.
+    console.log('[angieslist] 0 jobs (requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[angieslist] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── FlexJobs (Remote & Trade Jobs) ──────────────────────────────────────────
+
+function normalizeFlexJobsJob(job) {
+  const title = String(job?.job_title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company_name || 'Unknown company').trim() || 'Unknown company';
+  const category = String(job?.category || '').trim();
+  const jobType = String(job?.job_type || '').trim();
+  const locations = String(job?.location || 'Remote').trim().split(',').filter(Boolean);
+
+  const sourceText = [title, company, category, jobType].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `flexjobs_${job?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations: locations.length > 0 ? locations : ['Remote'],
+    remotePreferences: (job?.remote === true || String(job?.remote || '').toLowerCase() === 'true') ? ['Remote'] : [],
+    jobTypes: [jobType, category].filter(Boolean),
+    datePosted: job?.date_posted ? String(job.date_posted).slice(0, 10) : null,
+    logo: null,
+    url: job?.job_url || 'https://www.flexjobs.com',
+    source: 'flexjobs',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchFlexJobsJobs() {
+  try {
+    // FlexJobs requires paid membership for API access or web scraping.
+    // Free tier has limited access.
+    console.log('[flexjobs] 0 jobs (requires membership)');
+    return [];
+  } catch (err) {
+    console.log(`[flexjobs] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Porch (Home Services & Contractors) ────────────────────────────────────
+
+function normalizePorchJob(contractor) {
+  const name = String(contractor?.business_name || 'Contractor').trim() || 'Contractor';
+  const service = String(contractor?.service_type || 'Home Services').trim() || 'Home Services';
+  const location = String(contractor?.service_area || 'Multiple Locations').trim() || 'Multiple Locations';
+  const title = `${service}: ${name}`;
+
+  const sourceText = [title, location, String(contractor?.description || '')].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `porch_${contractor?.id || slugify(name + service)}`,
+    title,
+    company: name,
+    locations: [location],
+    remotePreferences: [],
+    jobTypes: [service, 'Licensed', 'Insured'],
+    datePosted: null,
+    logo: contractor?.photo_url || null,
+    url: contractor?.profile_url || 'https://www.porch.com',
+    source: 'porch',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'small',
+  });
+}
+
+async function fetchPorchJobs() {
+  try {
+    // Porch requires API authentication for contractor listings.
+    console.log('[porch] 0 jobs (requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[porch] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Indeed Trades Search (Web Scraping) ─────────────────────────────────────
+
+function normalizeIndeedJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.location || 'Multiple Locations').trim() || 'Multiple Locations';
+
+  const sourceText = [title, company, location, String(job?.snippet || '')].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `indeed_${job?.job_key || slugify(`${company}_${title}_${location}`)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: (job?.remote === true) ? ['Remote'] : [],
+    jobTypes: [],
+    datePosted: job?.posted_date ? String(job.posted_date).slice(0, 10) : null,
+    logo: job?.company_logo_url || null,
+    url: job?.apply_url || `https://indeed.com/viewjob?jk=${job?.job_key || ''}`,
+    source: 'indeed',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchIndeedJobs() {
+  try {
+    // Indeed has terms of service restrictions on scraping.
+    // Using their official API requires registration and has rate limits.
+    // For trades, we'd search: plumber, electrician, carpenter, HVAC, etc.
+    const trades = ['plumber', 'electrician', 'carpenter', 'hvac', 'roofer', 'mason'];
+    const all = [];
+
+    for (const trade of trades) {
+      try {
+        const params = new URLSearchParams({
+          'q': trade,
+          'country': 'US',
+          'limit': 50,
+        });
+
+        // Using Indeed's public job search endpoint (if available)
+        const r = await fetch(`https://api.indeed.com/ads/apisearch?${params.toString()}`, {
+          headers: {
+            'User-Agent': 'job-finder/1.0',
+          },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
+
+        if (r.ok) {
+          const payload = await r.json();
+          const results = Array.isArray(payload?.results) ? payload.results : [];
+          all.push(...results);
+        }
+      } catch {
+        // Continue with next trade
+      }
+    }
+
+    const normalized = all.map(normalizeIndeedJob).filter((job) => job.id && job.title);
+    console.log(`[indeed] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[indeed] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
 // ─── Combined Ingestion ────────────────────────────────────────────────────
 async function fetchAllJobs() {
   const [
@@ -3718,6 +4014,12 @@ async function fetchAllJobs() {
     usajobsJobs,
     upworkJobs,
     diceJobs,
+    taskrabbitJobs,
+    craigslistJobs,
+    angieslistJobs,
+    flexjobsJobs,
+    porchJobs,
+    indeedJobs,
   ] = await Promise.all([
     fetchClimatebaseJobs(),
     fetchGreenhouseJobs(),
@@ -3735,6 +4037,12 @@ async function fetchAllJobs() {
     fetchUSAJobsJobs(),
     fetchUpworkJobs(),
     fetchDiceJobs(),
+    fetchTaskRabbitJobs(),
+    fetchCraigslistJobs(),
+    fetchAngiesListJobs(),
+    fetchFlexJobsJobs(),
+    fetchPorchJobs(),
+    fetchIndeedJobs(),
   ]);
 
   // Deduplicate by source-specific identity first so cross-platform duplicates are retained.
@@ -3758,6 +4066,12 @@ async function fetchAllJobs() {
     ...usajobsJobs,
     ...upworkJobs,
     ...diceJobs,
+    ...taskrabbitJobs,
+    ...craigslistJobs,
+    ...angieslistJobs,
+    ...flexjobsJobs,
+    ...porchJobs,
+    ...indeedJobs,
   ]) {
     const source = String(job?.source || '').trim().toLowerCase();
     const stableId = String(job?.id || '').trim();
@@ -3786,7 +4100,13 @@ async function fetchAllJobs() {
     ` themuse: ${themuseJobs.length},` +
     ` usajobs: ${usajobsJobs.length},` +
     ` upwork: ${upworkJobs.length},` +
-    ` dice: ${diceJobs.length})`,
+    ` dice: ${diceJobs.length},` +
+    ` taskrabbit: ${taskrabbitJobs.length},` +
+    ` craigslist: ${craigslistJobs.length},` +
+    ` angieslist: ${angieslistJobs.length},` +
+    ` flexjobs: ${flexjobsJobs.length},` +
+    ` porch: ${porchJobs.length},` +
+    ` indeed: ${indeedJobs.length})`,
   );
   return all;
 }

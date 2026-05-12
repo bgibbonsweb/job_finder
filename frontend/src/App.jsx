@@ -200,6 +200,12 @@ const SOURCE_LABELS = {
   usajobs: 'USAJOBS',
   upwork: 'Upwork',
   dice: 'Dice',
+  taskrabbit: 'TaskRabbit',
+  craigslist: 'Craigslist',
+  angieslist: "Angie's List",
+  flexjobs: 'FlexJobs',
+  porch: 'Porch',
+  indeed: 'Indeed',
 }
 
 const JOB_FIELD_LABELS = {
