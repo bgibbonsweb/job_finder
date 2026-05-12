@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "build": "npm --prefix frontend install --include=dev && npm --prefix frontend run build",
-    "start": "node server.js",
+    "start": "node --max-old-space-size=400 server.js",
     "dev": "node --watch server.js",
     "test": "node --test 'test/**/*.test.js'",
     "dev:frontend": "npm --prefix frontend run dev",
