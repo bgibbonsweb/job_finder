@@ -9257,7 +9257,13 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/jobs') {
-    void handleJobsApi(req, res, url);
+    handleJobsApi(req, res, url).catch((error) => {
+      console.error('[api/jobs] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch climate jobs right now', details: String(error) }));
+      }
+    });
     return;
   }
 
@@ -9431,7 +9437,13 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/distribution-stats') {
-    void handleDistributionStatsApi(req, res, url);
+    handleDistributionStatsApi(req, res, url).catch((error) => {
+      console.error('[api/distribution-stats] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to calculate distribution stats', details: String(error) }));
+      }
+    });
     return;
   }
 
