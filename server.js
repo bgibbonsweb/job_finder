@@ -7997,7 +7997,6 @@ async function handleJobsApi(req, res, url) {
     const jobFieldCounts = {};
     const companySizeCounts = {};
     const endProductCounts = {};
-    const resumeScoresByJobId = new Map();
     let curveMaxRaw = 1;
     updateRequestProgress(requestId, {
       stepKey: 'resume-scan',
@@ -8012,27 +8011,6 @@ async function handleJobsApi(req, res, url) {
         { key: 'resume-scan', label: 'Scanning jobs vs resume', status: 'active' },
       ],
     });
-
-    // Build resume score curve baseline from keyword-matched jobs.
-    for (let idx = 0; idx < usFilteredJobs.length; idx += 1) {
-      const job = usFilteredJobs[idx];
-      const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeKey);
-      resumeScoresByJobId.set(job.id, resumeScoreData);
-      const raw = Number(resumeScoreData?.rawScore || 0);
-      if (raw > curveMaxRaw) curveMaxRaw = raw;
-
-      if (idx > 0 && idx % EVENT_LOOP_YIELD_INTERVAL === 0) {
-        const processed = idx + 1;
-        const pct = Math.round((processed / Math.max(1, usFilteredJobs.length)) * 24);
-        updateRequestProgress(requestId, {
-          processed,
-          total: Math.max(1, usFilteredJobs.length),
-          percent: Math.min(56, 22 + pct),
-        });
-        await yieldToEventLoop();
-      }
-    }
-    markSearchTiming('resumeScanDone');
 
     // Build facet counts for the keyword-matched population.
     for (let idx = 0; idx < usFilteredJobs.length; idx += 1) {
@@ -8059,7 +8037,19 @@ async function handleJobsApi(req, res, url) {
         endProductCounts[endProductCategory] = (endProductCounts[endProductCategory] || 0) + 1;
       }
 
+      if (idx > 0 && idx % EVENT_LOOP_YIELD_INTERVAL === 0) {
+        const processed = idx + 1;
+        const pct = Math.round((processed / Math.max(1, usFilteredJobs.length)) * 24);
+        updateRequestProgress(requestId, {
+          processed,
+          total: Math.max(1, usFilteredJobs.length),
+          percent: Math.min(56, 22 + pct),
+        });
+        await yieldToEventLoop();
+      }
+
     }
+    markSearchTiming('resumeScanDone');
 
     // Apply source filter after computing counts
     const sourceFilteredJobs = sourcesFilter
@@ -8111,9 +8101,12 @@ async function handleJobsApi(req, res, url) {
     const withRaw = [];
     for (let idx = 0; idx < visibilityFilteredJobs.length; idx += 1) {
       const job = visibilityFilteredJobs[idx];
+      const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeKey);
+      const raw = Number(resumeScoreData?.rawScore || 0);
+      if (raw > curveMaxRaw) curveMaxRaw = raw;
       withRaw.push({
         ...job,
-        ...(resumeScoresByJobId.get(job.id) || getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeKey)),
+        ...resumeScoreData,
         ...scoreBayAreaProximity(job, targetLocation, targetLocationCoordinates, targetLocationLabel),
         ...getImpactScoreCached(job, datasetKey, impactMode),
         ...scoreFreshness(job),
@@ -8888,6 +8881,15 @@ async function handleDistributionStatsApi(req, res, url) {
     const impactModeParam = (url.searchParams.get('impactMode') || '').trim().toLowerCase();
     const localModelParam = (url.searchParams.get('localModel') || '').trim().toLowerCase();
     const usOnlyParam = (url.searchParams.get('usOnly') || '1').trim().toLowerCase();
+    const locationParam = (url.searchParams.get('location') || 'bay-area').trim().toLowerCase();
+    const locationLabelParam = String(url.searchParams.get('locationLabel') || '').trim();
+    const locationLatParam = Number(url.searchParams.get('locationLat'));
+    const locationLngParam = Number(url.searchParams.get('locationLng'));
+    const targetLocation = locationParam;
+    const targetLocationLabel = locationLabelParam || locationParam;
+    const targetLocationCoordinates = (Number.isFinite(locationLatParam) && Number.isFinite(locationLngParam))
+      ? { lat: locationLatParam, lng: locationLngParam }
+      : null;
     const resumeSelection = parseResumeSelectionFromParams(url.searchParams);
     const builtInResumeIdParam = (url.searchParams.get('builtInResumeId') || '').trim().toLowerCase();
     const validResumeIds = new Set(Object.keys(RESUME_PROFILES));
@@ -8990,28 +8992,18 @@ async function handleDistributionStatsApi(req, res, url) {
       ? ['1', 'true', 'yes', 'on'].includes(localModelParam)
       : (rankingMode === 'ultra' ? true : LOCAL_MODEL_DEFAULT);
 
-    const resumeScoresByJobId = new Map();
     let curveMaxRaw = 1;
-    // Build resume score curve baseline from keyword-matched jobs.
-    for (let idx = 0; idx < usFilteredJobs.length; idx += 1) {
-      const job = usFilteredJobs[idx];
-      const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeId);
-      resumeScoresByJobId.set(job.id, resumeScoreData);
-      const raw = Number(resumeScoreData?.rawScore || 0);
-      if (raw > curveMaxRaw) curveMaxRaw = raw;
-
-      if (idx > 0 && idx % EVENT_LOOP_YIELD_INTERVAL === 0) {
-        await yieldToEventLoop();
-      }
-    }
 
     // Score every job across three dimensions using cached derived values.
     const withRaw = [];
     for (let idx = 0; idx < visibilityFilteredJobs.length; idx += 1) {
       const job = visibilityFilteredJobs[idx];
+      const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeId);
+      const raw = Number(resumeScoreData?.rawScore || 0);
+      if (raw > curveMaxRaw) curveMaxRaw = raw;
       withRaw.push({
         ...job,
-        ...(resumeScoresByJobId.get(job.id) || getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeId)),
+        ...resumeScoreData,
         ...scoreBayAreaProximity(job, targetLocation, targetLocationCoordinates, targetLocationLabel),
         ...getImpactScoreCached(job, datasetKey, impactMode),
         ...scoreFreshness(job),
