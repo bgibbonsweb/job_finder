@@ -9387,52 +9387,112 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/bookmarks') {
-    void handleBookmarksApi(req, res);
+    handleBookmarksApi(req, res).catch((error) => {
+      console.error('[api/bookmarks] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch bookmarks', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/bookmarks/action') {
-    void handleBookmarksActionApi(req, res);
+    handleBookmarksActionApi(req, res).catch((error) => {
+      console.error('[api/bookmarks/action] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to update bookmark', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/resumes') {
-    void handleResumesApi(req, res);
+    handleResumesApi(req, res).catch((error) => {
+      console.error('[api/resumes] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch resumes', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/resume-breakdown') {
-    void handleResumeBreakdownApi(req, res, url);
+    handleResumeBreakdownApi(req, res, url).catch((error) => {
+      console.error('[api/resume-breakdown] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to calculate resume breakdown', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/request-progress') {
-    void handleRequestProgressApi(req, res, url);
+    handleRequestProgressApi(req, res, url).catch((error) => {
+      console.error('[api/request-progress] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch request progress', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/audit/providers') {
-    void handleAuditProvidersApi(req, res);
+    handleAuditProvidersApi(req, res).catch((error) => {
+      console.error('[api/audit/providers] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch audit providers', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/audit/source') {
-    void handleAuditSourceApi(req, res, url);
+    handleAuditSourceApi(req, res, url).catch((error) => {
+      console.error('[api/audit/source] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch audit source', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/audit/signals') {
-    void handleAuditSignalsApi(req, res, url);
+    handleAuditSignalsApi(req, res, url).catch((error) => {
+      console.error('[api/audit/signals] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch audit signals', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/company-audit') {
-    void handleCompanyAuditApi(req, res, url);
+    handleCompanyAuditApi(req, res, url).catch((error) => {
+      console.error('[api/company-audit] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch company audit', details: String(error) }));
+      }
+    });
     return;
   }
 
   if (url.pathname === '/api/company-audits') {
-    void handleCompanyAuditsApi(req, res);
+    handleCompanyAuditsApi(req, res).catch((error) => {
+      console.error('[api/company-audits] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch company audits', details: String(error) }));
+      }
+    });
     return;
   }
 
@@ -9448,7 +9508,13 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/locations') {
-    void handleLocationsApi(req, res, url);
+    handleLocationsApi(req, res, url).catch((error) => {
+      console.error('[api/locations] Unhandled promise rejection:', error);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Unable to fetch locations', details: String(error) }));
+      }
+    });
     return;
   }
 
