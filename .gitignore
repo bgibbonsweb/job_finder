@@ -1,0 +1,11 @@
+node_modules/
+jobs.json
+scripts/
+.env
+.env.local
+private/app-data.enc
+private/server-secret.key
+dist/
+build/
+.DS_Store
+*.log
