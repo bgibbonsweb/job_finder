@@ -9258,10 +9258,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/jobs') {
     handleJobsApi(req, res, url).catch((error) => {
-      console.error('[api/jobs] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch climate jobs right now', details: String(error) }));
+      try {
+        console.error('[api/jobs] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch climate jobs right now', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/jobs] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9388,10 +9392,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/bookmarks') {
     handleBookmarksApi(req, res).catch((error) => {
-      console.error('[api/bookmarks] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch bookmarks', details: String(error) }));
+      try {
+        console.error('[api/bookmarks] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch bookmarks', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/bookmarks] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9399,10 +9407,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/bookmarks/action') {
     handleBookmarksActionApi(req, res).catch((error) => {
-      console.error('[api/bookmarks/action] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to update bookmark', details: String(error) }));
+      try {
+        console.error('[api/bookmarks/action] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to update bookmark', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/bookmarks/action] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9410,10 +9422,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/resumes') {
     handleResumesApi(req, res).catch((error) => {
-      console.error('[api/resumes] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch resumes', details: String(error) }));
+      try {
+        console.error('[api/resumes] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch resumes', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/resumes] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9421,10 +9437,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/resume-breakdown') {
     handleResumeBreakdownApi(req, res, url).catch((error) => {
-      console.error('[api/resume-breakdown] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to calculate resume breakdown', details: String(error) }));
+      try {
+        console.error('[api/resume-breakdown] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to calculate resume breakdown', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/resume-breakdown] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9432,10 +9452,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/request-progress') {
     handleRequestProgressApi(req, res, url).catch((error) => {
-      console.error('[api/request-progress] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch request progress', details: String(error) }));
+      try {
+        console.error('[api/request-progress] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch request progress', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/request-progress] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9443,10 +9467,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/audit/providers') {
     handleAuditProvidersApi(req, res).catch((error) => {
-      console.error('[api/audit/providers] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch audit providers', details: String(error) }));
+      try {
+        console.error('[api/audit/providers] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch audit providers', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/audit/providers] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9454,10 +9482,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/audit/source') {
     handleAuditSourceApi(req, res, url).catch((error) => {
-      console.error('[api/audit/source] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch audit source', details: String(error) }));
+      try {
+        console.error('[api/audit/source] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch audit source', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/audit/source] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9465,10 +9497,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/audit/signals') {
     handleAuditSignalsApi(req, res, url).catch((error) => {
-      console.error('[api/audit/signals] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch audit signals', details: String(error) }));
+      try {
+        console.error('[api/audit/signals] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch audit signals', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/audit/signals] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9476,10 +9512,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/company-audit') {
     handleCompanyAuditApi(req, res, url).catch((error) => {
-      console.error('[api/company-audit] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch company audit', details: String(error) }));
+      try {
+        console.error('[api/company-audit] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch company audit', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/company-audit] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9487,10 +9527,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/company-audits') {
     handleCompanyAuditsApi(req, res).catch((error) => {
-      console.error('[api/company-audits] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch company audits', details: String(error) }));
+      try {
+        console.error('[api/company-audits] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch company audits', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/company-audits] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9498,10 +9542,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/distribution-stats') {
     handleDistributionStatsApi(req, res, url).catch((error) => {
-      console.error('[api/distribution-stats] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to calculate distribution stats', details: String(error) }));
+      try {
+        console.error('[api/distribution-stats] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to calculate distribution stats', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/distribution-stats] Error in error handler:', handlerError);
       }
     });
     return;
@@ -9509,10 +9557,14 @@ const server = http.createServer((req, res) => {
 
   if (url.pathname === '/api/locations') {
     handleLocationsApi(req, res, url).catch((error) => {
-      console.error('[api/locations] Unhandled promise rejection:', error);
-      if (!res.headersSent) {
-        res.writeHead(502, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Unable to fetch locations', details: String(error) }));
+      try {
+        console.error('[api/locations] Unhandled error:', error);
+        if (!res.headersSent && res.writable) {
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Unable to fetch locations', details: String(error)?.substring(0, 200) }));
+        }
+      } catch (handlerError) {
+        console.error('[api/locations] Error in error handler:', handlerError);
       }
     });
     return;
