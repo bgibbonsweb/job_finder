@@ -188014,5 +188014,817 @@
       "Financial score is strongest for public companies; lower confidence for private firms.",
       "Note: Some data sources may return null if APIs are temporarily unavailable or rate-limited."
     ]
+  },
+  "hatch data": {
+    "company": "Hatch Data",
+    "overall": 51,
+    "companyQuality": 42,
+    "financialHealth": 49,
+    "productLegitimacy": 53,
+    "cultureQuality": 57,
+    "confidence": "medium",
+    "sourceCoverage": 4,
+    "scoreBreakdown": {
+      "overallWeights": {
+        "companyQuality": 0.15,
+        "financialHealth": 0.3,
+        "productLegitimacy": 0.3,
+        "cultureQuality": 0.25
+      },
+      "cultureProxyWeights": {
+        "base": 20,
+        "companyQuality": 0.4,
+        "financialHealth": 0.25,
+        "productLegitimacy": 0.2
+      },
+      "notes": [
+        "Overall = 0.15*companyQuality + 0.30*financialHealth + 0.30*productLegitimacy + 0.25*cultureQuality",
+        "cultureQuality is a proxy derived from legitimacy and stability signals in this MVP"
+      ],
+      "categoryDetails": {
+        "companyQuality": {
+          "total": 42,
+          "parts": {
+            "base": 32,
+            "clearbitDomain": 0,
+            "wikipediaDepth": 0,
+            "githubOrgMaturity": 0,
+            "openCorporatesStatus": 0,
+            "hackerNewsMentions": 10
+          },
+          "explanation": [
+            "base 32",
+            "+ clearbit domain 0",
+            "+ wikipedia depth 0",
+            "+ github org maturity 0",
+            "+ OpenCorporates status 0",
+            "+ hn mentions 10"
+          ]
+        },
+        "financialHealth": {
+          "total": 49,
+          "parts": {
+            "baseFromMarketCap": 45,
+            "marketCapBand": "unknown",
+            "trendAdjustment": 0,
+            "altmanAdjustment": 0,
+            "piotroskiAdjustment": 0,
+            "secFilingFreshnessAdjustment": 4,
+            "marketCap": null,
+            "changePercent": null,
+            "altmanZScore": null,
+            "piotroskiScore": null
+          },
+          "explanation": [
+            "base from market-cap band (unknown): 45",
+            "+ trend adjustment from latest price move: 0",
+            "+ Altman Z adjustment: 0",
+            "+ Piotroski adjustment: 0",
+            "+ SEC filing freshness adjustment: 4"
+          ]
+        },
+        "productLegitimacy": {
+          "total": 53,
+          "parts": {
+            "base": 26,
+            "clearbitDomain": 0,
+            "wikipediaPresence": 0,
+            "secRegistrant": 12,
+            "openCorporatesRecord": 0,
+            "githubStars": 0,
+            "githubFollowers": 0,
+            "hackerNewsMentions": 15,
+            "patents": 0,
+            "stackOverflowPresence": 0,
+            "domainReputation": 0,
+            "googleTrendsInterest": 0,
+            "waybackArchiveAge": 0
+          },
+          "explanation": [
+            "base 26",
+            "+ clearbit domain 0",
+            "+ wikipedia presence 0",
+            "+ SEC registrant signal 12",
+            "+ OpenCorporates record 0",
+            "+ github stars 0",
+            "+ github followers 0",
+            "+ hn mentions 15"
+          ]
+        },
+        "cultureQuality": {
+          "total": 57,
+          "parts": {
+            "base": 20,
+            "companyQuality": 17,
+            "financialHealth": 12,
+            "productLegitimacy": 11,
+            "redditSentiment": -3,
+            "perplexityReputation": 0,
+            "glassdoorRating": 0
+          },
+          "explanation": [
+            "base 20",
+            "+ 0.4*companyQuality => 17",
+            "+ 0.25*financialHealth => 12",
+            "+ 0.2*productLegitimacy => 11",
+            "+ reddit sentiment (1↑ 2↓ from 7 posts): -3"
+          ]
+        }
+      }
+    },
+    "updatedAt": "2026-05-12T01:29:21.812Z",
+    "signals": {
+      "clearbit": null,
+      "wikipedia": null,
+      "yahooFinance": null,
+      "sec": {
+        "matchedTicker": "ADP",
+        "cik": "0000008670",
+        "matchedEntityName": "AUTOMATIC DATA PROCESSING INC",
+        "entityName": "AUTOMATIC DATA PROCESSING INC",
+        "sic": "7374",
+        "sicDescription": "Services-Computer Processing & Data Preparation",
+        "fiscalYearEnd": "0630",
+        "filings": {
+          "last10KDate": "2025-08-06",
+          "last10QDate": "2026-04-30",
+          "recent8kCount": 8
+        },
+        "facts": {
+          "revenue": {
+            "value": 20560900000,
+            "end": "2025-06-30",
+            "filed": "2025-08-06",
+            "form": "10-K",
+            "unit": null
+          },
+          "netIncome": {
+            "value": 3434900000,
+            "end": "2026-03-31",
+            "filed": "2026-04-30",
+            "form": "10-Q",
+            "unit": null
+          },
+          "assets": {
+            "value": 64484200000,
+            "end": "2026-03-31",
+            "filed": "2026-04-30",
+            "form": "10-Q",
+            "unit": null
+          },
+          "liabilities": {
+            "value": 58134100000,
+            "end": "2026-03-31",
+            "filed": "2026-04-30",
+            "form": "10-Q",
+            "unit": null
+          }
+        }
+      },
+      "openCorporates": {
+        "unavailable": true,
+        "reason": "Missing OPENCORPORATES_API_TOKEN"
+      },
+      "fmp": {
+        "unavailable": true,
+        "reason": "Missing FMP_API_KEY"
+      },
+      "github": null,
+      "hackerNews": {
+        "mentions2y": 923
+      },
+      "reddit": {
+        "postsFound": 7,
+        "recentPosts": 7,
+        "topSubreddits": [
+          "FishingForBeginners",
+          "dataengineeringjobs",
+          "framer",
+          "ArcRaiders",
+          "reactnative",
+          "SEO"
+        ],
+        "negativeMentions": 2,
+        "positiveMentions": 1,
+        "searchUrl": "https://www.reddit.com/search/?q=Hatch%20Data&sort=relevance&t=year"
+      },
+      "perplexity": {
+        "unavailable": true,
+        "reason": "Missing PERPLEXITY_API_KEY"
+      },
+      "waybackMachine": null,
+      "patent": null,
+      "stackOverflow": null,
+      "domainReputation": null,
+      "googleTrends": {
+        "trendUrl": "https://trends.google.com/trends/explore?q=Hatch%20Data",
+        "note": "Google Trends search link provided; real-time data requires authentication"
+      }
+    },
+    "methodsUsed": [
+      {
+        "provider": "clearbit",
+        "endpoint": "/api/audit/source?provider=clearbit&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "openCorporates",
+        "endpoint": "/api/audit/source?provider=openCorporates&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "yahooFinance",
+        "endpoint": "/api/audit/source?provider=yahooFinance&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "hackerNews",
+        "endpoint": "/api/audit/source?provider=hackerNews&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "wikipedia",
+        "endpoint": "/api/audit/source?provider=wikipedia&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "reddit",
+        "endpoint": "/api/audit/source?provider=reddit&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "sec",
+        "endpoint": "/api/audit/source?provider=sec&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "fmp",
+        "endpoint": "/api/audit/source?provider=fmp&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "perplexity",
+        "endpoint": "/api/audit/source?provider=perplexity&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "github",
+        "endpoint": "/api/audit/source?provider=github&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "googleTrends",
+        "endpoint": "/api/audit/source?provider=googleTrends&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "waybackMachine",
+        "endpoint": "/api/audit/source?provider=waybackMachine&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "stackOverflow",
+        "endpoint": "/api/audit/source?provider=stackOverflow&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "patent",
+        "endpoint": "/api/audit/source?provider=patent&company=Hatch%20Data",
+        "success": true
+      },
+      {
+        "provider": "domainReputation",
+        "endpoint": "/api/audit/source?provider=domainReputation&company=Hatch%20Data",
+        "success": true
+      }
+    ],
+    "internetResearch": {
+      "reddit": {
+        "postsFound": 7,
+        "recentPosts": 7,
+        "topSubreddits": [
+          "FishingForBeginners",
+          "dataengineeringjobs",
+          "framer",
+          "ArcRaiders",
+          "reactnative",
+          "SEO"
+        ],
+        "negativeMentions": 2,
+        "positiveMentions": 1,
+        "searchUrl": "https://www.reddit.com/search/?q=Hatch%20Data&sort=relevance&t=year"
+      },
+      "perplexity": null
+    },
+    "sourceLinks": [
+      {
+        "key": "clearbit",
+        "label": "Clearbit Company Suggest",
+        "url": "https://autocomplete.clearbit.com/v1/companies/suggest?query=Hatch%20Data",
+        "available": false
+      },
+      {
+        "key": "wikipedia",
+        "label": "Wikipedia Summary",
+        "url": "https://en.wikipedia.org/wiki/Special:Search?search=Hatch%20Data",
+        "available": false
+      },
+      {
+        "key": "yahooFinance",
+        "label": "Yahoo Finance",
+        "url": "https://finance.yahoo.com/lookup?s=Hatch%20Data",
+        "available": false
+      },
+      {
+        "key": "sec",
+        "label": "SEC EDGAR",
+        "url": "https://data.sec.gov/submissions/CIK0000008670.json",
+        "available": true
+      },
+      {
+        "key": "fmp",
+        "label": "FinancialModelingPrep",
+        "url": "https://site.financialmodelingprep.com/developer/docs",
+        "available": false
+      },
+      {
+        "key": "openCorporates",
+        "label": "OpenCorporates",
+        "url": "https://opencorporates.com/companies?q=Hatch%20Data",
+        "available": false
+      },
+      {
+        "key": "github",
+        "label": "GitHub Org",
+        "url": "https://github.com/search?q=Hatch%20Data&type=organizations",
+        "available": false
+      },
+      {
+        "key": "hackerNews",
+        "label": "Hacker News (Algolia)",
+        "url": "https://hn.algolia.com/?q=Hatch%20Data",
+        "available": true
+      },
+      {
+        "key": "reddit",
+        "label": "Reddit Search",
+        "url": "https://www.reddit.com/search/?q=Hatch%20Data&sort=relevance&t=year",
+        "available": true
+      },
+      {
+        "key": "glassdoor",
+        "label": "Glassdoor",
+        "url": "https://www.glassdoor.com/Search/results.htm?keyword=Hatch%20Data",
+        "available": false
+      },
+      {
+        "key": "trustpilot",
+        "label": "Trustpilot Business Search",
+        "url": "https://www.trustpilot.com/search?query=Hatch%20Data",
+        "available": true
+      },
+      {
+        "key": "waybackMachine",
+        "label": "Wayback Machine Archives",
+        "url": "https://web.archive.org/web/*/hatch%20data.com",
+        "available": false
+      },
+      {
+        "key": "patents",
+        "label": "Google Patents",
+        "url": "https://patents.google.com/?q=Hatch%20Data",
+        "available": false
+      },
+      {
+        "key": "stackOverflow",
+        "label": "Stack Overflow Tag",
+        "url": "https://stackoverflow.com/questions/tagged/hatch%20data",
+        "available": false
+      },
+      {
+        "key": "googleTrends",
+        "label": "Google Trends",
+        "url": "https://trends.google.com/trends/explore?q=Hatch%20Data",
+        "available": false
+      }
+    ],
+    "notes": [
+      "Audit uses 15+ public data sources: SEC EDGAR, OpenCorporates, Yahoo Finance, GitHub, Wikipedia, Hacker News, Reddit, Stack Overflow, Patents API, Wayback Machine, Domain Registration, Google Trends, Perplexity AI, and more.",
+      "Product legitimacy now scores innovation (patents), tech adoption (Stack Overflow), domain reputation, search interest, and archival history.",
+      "Culture score includes internet signals: Reddit sentiment, Perplexity AI research, and Glassdoor rating when available.",
+      "Financial score is strongest for public companies; lower confidence for private firms.",
+      "Note: Some data sources may return null if APIs are temporarily unavailable or rate-limited."
+    ]
+  },
+  "climatepartner": {
+    "company": "ClimatePartner",
+    "overall": 61,
+    "companyQuality": 54,
+    "financialHealth": 49,
+    "productLegitimacy": 69,
+    "cultureQuality": 68,
+    "confidence": "high",
+    "sourceCoverage": 6,
+    "scoreBreakdown": {
+      "overallWeights": {
+        "companyQuality": 0.15,
+        "financialHealth": 0.3,
+        "productLegitimacy": 0.3,
+        "cultureQuality": 0.25
+      },
+      "cultureProxyWeights": {
+        "base": 20,
+        "companyQuality": 0.4,
+        "financialHealth": 0.25,
+        "productLegitimacy": 0.2
+      },
+      "notes": [
+        "Overall = 0.15*companyQuality + 0.30*financialHealth + 0.30*productLegitimacy + 0.25*cultureQuality",
+        "cultureQuality is a proxy derived from legitimacy and stability signals in this MVP"
+      ],
+      "categoryDetails": {
+        "companyQuality": {
+          "total": 54,
+          "parts": {
+            "base": 32,
+            "clearbitDomain": 18,
+            "wikipediaDepth": 0,
+            "githubOrgMaturity": 4,
+            "openCorporatesStatus": 0,
+            "hackerNewsMentions": 0
+          },
+          "explanation": [
+            "base 32",
+            "+ clearbit domain 18",
+            "+ wikipedia depth 0",
+            "+ github org maturity 4",
+            "+ OpenCorporates status 0",
+            "+ hn mentions 0"
+          ]
+        },
+        "financialHealth": {
+          "total": 49,
+          "parts": {
+            "baseFromMarketCap": 45,
+            "marketCapBand": "unknown",
+            "trendAdjustment": 0,
+            "altmanAdjustment": 0,
+            "piotroskiAdjustment": 0,
+            "secFilingFreshnessAdjustment": 4,
+            "marketCap": null,
+            "changePercent": null,
+            "altmanZScore": null,
+            "piotroskiScore": null
+          },
+          "explanation": [
+            "base from market-cap band (unknown): 45",
+            "+ trend adjustment from latest price move: 0",
+            "+ Altman Z adjustment: 0",
+            "+ Piotroski adjustment: 0",
+            "+ SEC filing freshness adjustment: 4"
+          ]
+        },
+        "productLegitimacy": {
+          "total": 69,
+          "parts": {
+            "base": 26,
+            "clearbitDomain": 14,
+            "wikipediaPresence": 0,
+            "secRegistrant": 12,
+            "openCorporatesRecord": 0,
+            "githubStars": 6,
+            "githubFollowers": 11,
+            "hackerNewsMentions": 0,
+            "patents": 0,
+            "stackOverflowPresence": 0,
+            "domainReputation": 0,
+            "googleTrendsInterest": 0,
+            "waybackArchiveAge": 0
+          },
+          "explanation": [
+            "base 26",
+            "+ clearbit domain 14",
+            "+ wikipedia presence 0",
+            "+ SEC registrant signal 12",
+            "+ OpenCorporates record 0",
+            "+ github stars 6",
+            "+ github followers 11",
+            "+ hn mentions 0"
+          ]
+        },
+        "cultureQuality": {
+          "total": 68,
+          "parts": {
+            "base": 20,
+            "companyQuality": 22,
+            "financialHealth": 12,
+            "productLegitimacy": 14,
+            "redditSentiment": 0,
+            "perplexityReputation": 0,
+            "glassdoorRating": 0
+          },
+          "explanation": [
+            "base 20",
+            "+ 0.4*companyQuality => 22",
+            "+ 0.25*financialHealth => 12",
+            "+ 0.2*productLegitimacy => 14",
+            "+ reddit sentiment (0↑ 0↓ from 25 posts): 0"
+          ]
+        }
+      }
+    },
+    "updatedAt": "2026-05-12T01:29:23.404Z",
+    "signals": {
+      "clearbit": {
+        "name": "ClimatePartner",
+        "domain": "climatepartner.com",
+        "logo": null,
+        "type": null
+      },
+      "wikipedia": null,
+      "yahooFinance": null,
+      "sec": {
+        "matchedTicker": "NVDA",
+        "cik": "0001045810",
+        "matchedEntityName": "NVIDIA CORP",
+        "entityName": "NVIDIA CORP",
+        "sic": "3674",
+        "sicDescription": "Semiconductors & Related Devices",
+        "fiscalYearEnd": "0131",
+        "filings": {
+          "last10KDate": "2026-02-25",
+          "last10QDate": "2025-11-19",
+          "recent8kCount": 10
+        },
+        "facts": {
+          "revenue": {
+            "value": 215938000000,
+            "end": "2026-01-25",
+            "filed": "2026-02-25",
+            "form": "10-K",
+            "unit": null
+          },
+          "netIncome": {
+            "value": 120067000000,
+            "end": "2026-01-25",
+            "filed": "2026-02-25",
+            "form": "10-K",
+            "unit": null
+          },
+          "assets": {
+            "value": 206803000000,
+            "end": "2026-01-25",
+            "filed": "2026-02-25",
+            "form": "10-K",
+            "unit": null
+          },
+          "liabilities": {
+            "value": 49510000000,
+            "end": "2026-01-25",
+            "filed": "2026-02-25",
+            "form": "10-K",
+            "unit": null
+          }
+        }
+      },
+      "openCorporates": {
+        "unavailable": true,
+        "reason": "Missing OPENCORPORATES_API_TOKEN"
+      },
+      "fmp": {
+        "unavailable": true,
+        "reason": "Missing FMP_API_KEY"
+      },
+      "github": {
+        "org": "ClimatePartner",
+        "followers": 22,
+        "publicRepos": 1,
+        "totalStars": 0
+      },
+      "hackerNews": {
+        "mentions2y": 0
+      },
+      "reddit": {
+        "postsFound": 25,
+        "recentPosts": 25,
+        "topSubreddits": [
+          "energy",
+          "climate",
+          "anticapitalism",
+          "Uniteagainsttheright",
+          "Left_News",
+          "politicsinthewild"
+        ],
+        "negativeMentions": 0,
+        "positiveMentions": 0,
+        "searchUrl": "https://www.reddit.com/search/?q=ClimatePartner&sort=relevance&t=year"
+      },
+      "perplexity": {
+        "unavailable": true,
+        "reason": "Missing PERPLEXITY_API_KEY"
+      },
+      "waybackMachine": null,
+      "patent": null,
+      "stackOverflow": null,
+      "domainReputation": null,
+      "googleTrends": {
+        "trendUrl": "https://trends.google.com/trends/explore?q=ClimatePartner",
+        "note": "Google Trends search link provided; real-time data requires authentication"
+      }
+    },
+    "methodsUsed": [
+      {
+        "provider": "clearbit",
+        "endpoint": "/api/audit/source?provider=clearbit&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "openCorporates",
+        "endpoint": "/api/audit/source?provider=openCorporates&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "yahooFinance",
+        "endpoint": "/api/audit/source?provider=yahooFinance&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "hackerNews",
+        "endpoint": "/api/audit/source?provider=hackerNews&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "wikipedia",
+        "endpoint": "/api/audit/source?provider=wikipedia&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "reddit",
+        "endpoint": "/api/audit/source?provider=reddit&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "sec",
+        "endpoint": "/api/audit/source?provider=sec&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "fmp",
+        "endpoint": "/api/audit/source?provider=fmp&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "perplexity",
+        "endpoint": "/api/audit/source?provider=perplexity&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "github",
+        "endpoint": "/api/audit/source?provider=github&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "googleTrends",
+        "endpoint": "/api/audit/source?provider=googleTrends&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "patent",
+        "endpoint": "/api/audit/source?provider=patent&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "stackOverflow",
+        "endpoint": "/api/audit/source?provider=stackOverflow&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "waybackMachine",
+        "endpoint": "/api/audit/source?provider=waybackMachine&company=ClimatePartner",
+        "success": true
+      },
+      {
+        "provider": "domainReputation",
+        "endpoint": "/api/audit/source?provider=domainReputation&company=ClimatePartner",
+        "success": true
+      }
+    ],
+    "internetResearch": {
+      "reddit": {
+        "postsFound": 25,
+        "recentPosts": 25,
+        "topSubreddits": [
+          "energy",
+          "climate",
+          "anticapitalism",
+          "Uniteagainsttheright",
+          "Left_News",
+          "politicsinthewild"
+        ],
+        "negativeMentions": 0,
+        "positiveMentions": 0,
+        "searchUrl": "https://www.reddit.com/search/?q=ClimatePartner&sort=relevance&t=year"
+      },
+      "perplexity": null
+    },
+    "sourceLinks": [
+      {
+        "key": "clearbit",
+        "label": "Clearbit Company Suggest",
+        "url": "https://autocomplete.clearbit.com/v1/companies/suggest?query=ClimatePartner",
+        "available": true
+      },
+      {
+        "key": "wikipedia",
+        "label": "Wikipedia Summary",
+        "url": "https://en.wikipedia.org/wiki/Special:Search?search=ClimatePartner",
+        "available": false
+      },
+      {
+        "key": "yahooFinance",
+        "label": "Yahoo Finance",
+        "url": "https://finance.yahoo.com/lookup?s=ClimatePartner",
+        "available": false
+      },
+      {
+        "key": "sec",
+        "label": "SEC EDGAR",
+        "url": "https://data.sec.gov/submissions/CIK0001045810.json",
+        "available": true
+      },
+      {
+        "key": "fmp",
+        "label": "FinancialModelingPrep",
+        "url": "https://site.financialmodelingprep.com/developer/docs",
+        "available": false
+      },
+      {
+        "key": "openCorporates",
+        "label": "OpenCorporates",
+        "url": "https://opencorporates.com/companies?q=ClimatePartner",
+        "available": false
+      },
+      {
+        "key": "github",
+        "label": "GitHub Org",
+        "url": "https://github.com/ClimatePartner",
+        "available": true
+      },
+      {
+        "key": "hackerNews",
+        "label": "Hacker News (Algolia)",
+        "url": "https://hn.algolia.com/?q=ClimatePartner",
+        "available": true
+      },
+      {
+        "key": "reddit",
+        "label": "Reddit Search",
+        "url": "https://www.reddit.com/search/?q=ClimatePartner&sort=relevance&t=year",
+        "available": true
+      },
+      {
+        "key": "glassdoor",
+        "label": "Glassdoor",
+        "url": "https://www.glassdoor.com/Search/results.htm?keyword=ClimatePartner",
+        "available": false
+      },
+      {
+        "key": "trustpilot",
+        "label": "Trustpilot Business Search",
+        "url": "https://www.trustpilot.com/search?query=ClimatePartner",
+        "available": true
+      },
+      {
+        "key": "waybackMachine",
+        "label": "Wayback Machine Archives",
+        "url": "https://web.archive.org/web/*/climatepartner.com",
+        "available": false
+      },
+      {
+        "key": "patents",
+        "label": "Google Patents",
+        "url": "https://patents.google.com/?q=ClimatePartner",
+        "available": false
+      },
+      {
+        "key": "stackOverflow",
+        "label": "Stack Overflow Tag",
+        "url": "https://stackoverflow.com/questions/tagged/climatepartner",
+        "available": false
+      },
+      {
+        "key": "googleTrends",
+        "label": "Google Trends",
+        "url": "https://trends.google.com/trends/explore?q=ClimatePartner",
+        "available": false
+      }
+    ],
+    "notes": [
+      "Audit uses 15+ public data sources: SEC EDGAR, OpenCorporates, Yahoo Finance, GitHub, Wikipedia, Hacker News, Reddit, Stack Overflow, Patents API, Wayback Machine, Domain Registration, Google Trends, Perplexity AI, and more.",
+      "Product legitimacy now scores innovation (patents), tech adoption (Stack Overflow), domain reputation, search interest, and archival history.",
+      "Culture score includes internet signals: Reddit sentiment, Perplexity AI research, and Glassdoor rating when available.",
+      "Financial score is strongest for public companies; lower confidence for private firms.",
+      "Note: Some data sources may return null if APIs are temporarily unavailable or rate-limited."
+    ]
   }
 }
