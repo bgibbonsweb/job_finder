@@ -1,107 +1,97 @@
-# Railway Deployment Setup - Quick Start
+# Railway Deployment Setup - PostgreSQL Edition
 
-## Step 1: Connect GitHub Repository
-1. Go to https://railway.app
-2. Click "New Project"
-3. Select "GitHub" → Connect your GitHub account
-4. Select the `bgibbonsweb/job_finder` repository
-5. Railway will auto-detect this is a Node.js project
+## Step 1: Add PostgreSQL Database
+1. Go to your Railway project dashboard
+2. Click "New" → Select "Database" → Choose "PostgreSQL"
+3. Railway creates the database and provides `DATABASE_URL` in your project variables automatically
+4. Note the connection string for later
 
-## Step 2: Configure Environment Variables
-In Railway dashboard, go to your project → Variables tab and add:
+## Step 2: Connect GitHub Repository
+1. In your Railway project, click "New" → "GitHub Repo"
+2. Select the `bgibbonsweb/job_finder` repository
+3. Railway auto-detects this is a Node.js project with PostgreSQL
+
+## Step 3: Configure Environment Variables
+In Railway dashboard, go to Variables tab and add:
 
 ```
 NODE_ENV=production
 PORT=3000
 SESSION_SECRET=<generate-random-32-chars>
+DATABASE_URL=<railway-provides-this-auto>
 ```
 
+**Railway Note:** DATABASE_URL is automatically set when you add PostgreSQL. Don't override it.
+
 **Generate SESSION_SECRET:**
-On your terminal run:
 ```bash
 node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 ```
-Copy the output and paste it as `SESSION_SECRET` value.
 
-## Step 3: Configure Build & Start
-In Railway dashboard → Settings:
+## Step 4: Initialize Database Schema
+Before deployment, prepare the database:
 
-- **Build Command**: Leave blank (Railway auto-detects npm scripts)
-- **Start Command**: Leave blank (Railway uses `npm start`)
+1. Get your Railway PostgreSQL URL from the dashboard
+2. In your local terminal, run:
+```bash
+export DATABASE_URL="postgresql://user:pass@host:5432/railway"
+npm run db:init
+npm run db:migrate
+```
 
-Railway will automatically:
-1. Run `npm install` (root + frontend)
-2. Run `npm start` which:
-   - Builds the React frontend: `npm --prefix frontend run build`
-   - Starts the Node.js server: `node server.js`
+This:
+- Creates all database tables
+- Migrates any existing data from JSON files
+- Sets up indexes for performance
 
-## Step 4: Deploy
+## Step 5: Deploy
 Click "Deploy" button. Railway will:
-1. Clone your repository
-2. Install dependencies
-3. Build the frontend
-4. Start the server
-5. Assign you a public URL like `https://your-project.railway.app`
+1. Install dependencies (root + frontend)
+2. Build React frontend
+3. Start Node.js server connected to PostgreSQL
+4. Assign you a public URL
 
-## Step 5: Test the Deployment
-Once deployed, visit: `https://your-project.railway.app`
+## Step 6: Test the Deployment
+Visit: `https://your-project.railway.app`
 
 You should see:
-- ✅ Frontend loads with job search
-- ✅ API endpoints work at `/api/jobs`
-- ✅ Authentication works with `/api/auth/*` endpoints
-
-## Monitoring & Debugging
-
-**View Logs:**
-- Railway Dashboard → Logs tab
-- Watch for any build or runtime errors
-
-**Common Issues:**
-
-1. **"Frontend not yet built"** → The build step failed
-   - Check logs for `npm run build` errors
-   - Verify all dependencies installed
-
-2. **"Port already in use"** → Railway auto-assigns PORT
-   - Don't hardcode port; use `process.env.PORT`
-   - Server already reads this ✅
-
-3. **API errors** → Check environment variables
-   - Ensure `SESSION_SECRET` is set
-   - Verify `NODE_ENV=production`
-
-## Optional: Add Database
-
-If you want to persist user data across deployments (currently uses local JSON files):
-
-1. **Add PostgreSQL** (Railway includes free tier):
-   - Railway → Plugins → Add PostgreSQL
-   - Add `DATABASE_URL` to variables
-
-2. **Migrate storage** (future enhancement):
-   - Replace `private/app-data.enc` with database
-   - Use encrypted columns for sensitive data
+- ✅ Frontend loads
+- ✅ Sign up/login works (data persists in PostgreSQL)
+- ✅ Bookmarks save to database
+- ✅ Job search works
 
 ## Production Checklist
 
-- ✅ Environment variables configured
-- ✅ SESSION_SECRET set to cryptographically random value
-- ✅ NODE_ENV=production for secure cookies
+- ✅ PostgreSQL database added
+- ✅ DATABASE_URL configured
+- ✅ SESSION_SECRET set to random value
+- ✅ NODE_ENV=production
+- ✅ Database initialized with `npm run db:init`
+- ✅ Data migrated with `npm run db:migrate`
 - ✅ Frontend builds successfully
-- ✅ Server serves static assets
-- ✅ HTTPS auto-enabled (Railway provides)
-- ✅ Logs accessible for debugging
+- ✅ HTTPS auto-enabled
 
-## Next Steps
+## Database Tables
 
-1. Monitor your Railway deployment for 24 hours
-2. Test authentication flow (signup → login → bookmark)
-3. Check job search performance
-4. Review logs for any warnings
+- `users` - Email & password
+- `sessions` - Login tokens
+- `resumes` - User resumes
+- `user_jobs` - Bookmarks & hidden jobs
+- `company_audits` - Cache
+- `user_preferences` - Search state
 
-## Support Resources
+## Debugging
+
+**View logs:**
+- Railway Dashboard → Logs tab
+
+**Common issues:**
+
+1. **"relation users does not exist"** → Run `npm run db:init`
+2. **"connection refused"** → Check DATABASE_URL is set
+3. **"port already in use"** → Server uses `process.env.PORT` ✅
+
+## Support
 
 - [Railway Docs](https://docs.railway.app)
-- [Node.js on Railway](https://docs.railway.app/guides/nodejs)
-- [Environment Variables](https://docs.railway.app/develop/variables)
+- [PostgreSQL Guide](https://docs.railway.app/guides/databases)

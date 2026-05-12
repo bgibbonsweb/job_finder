@@ -8,13 +8,16 @@
     "dev": "node --watch server.js",
     "test": "node --test 'test/**/*.test.js'",
     "dev:frontend": "npm --prefix frontend run dev",
-    "go": "concurrently --kill-others --prefix-colors cyan,green --names server,frontend \"npm run dev\" \"npm run dev:frontend\""
+    "go": "concurrently --kill-others --prefix-colors cyan,green --names server,frontend \"npm run dev\" \"npm run dev:frontend\"",
+    "db:init": "node server/db/init.js",
+    "db:migrate": "node server/db/migrate.js"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.0.3",
+    "pg": "^8.11.3"
   },
   "devDependencies": {
     "concurrently": "^9.2.1"
