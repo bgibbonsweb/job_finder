@@ -51,6 +51,15 @@ Click "Deploy" button. Railway will:
 3. Start Node.js server connected to PostgreSQL
 4. Assign you a public URL
 
+Railway service settings:
+- Build Command: npm install && npm run build
+- Start Command: npm start
+
+Why this works:
+- Frontend build tooling (Vite) is in frontend devDependencies.
+- The root build script installs frontend deps with --include=dev before running vite build.
+- The start script only runs node server.js, so runtime does not depend on Vite.
+
 ## Step 6: Test the Deployment
 Visit: `https://your-project.railway.app`
 
@@ -90,6 +99,7 @@ You should see:
 1. **"relation users does not exist"** → Run `npm run db:init`
 2. **"connection refused"** → Check DATABASE_URL is set
 3. **"port already in use"** → Server uses `process.env.PORT` ✅
+4. **"vite: not found" during build** → Use Build Command `npm install && npm run build` and keep root build script as configured.
 
 ## Support
 
