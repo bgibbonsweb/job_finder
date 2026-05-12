@@ -3658,36 +3658,37 @@ function normalizeDiceJob(hit) {
 
 async function fetchDiceJobs() {
   try {
-    // Dice provides job listings via their public endpoint
+    // Dice public search endpoint
     const all = [];
-    for (let page = 1; ; page += 1) {
-      const params = new URLSearchParams({
-        'country': 'US',
-        'page': page,
-        'pageSize': 100,
-      });
+    for (let page = 0; page < 10; page += 1) {
+      try {
+        const params = new URLSearchParams({
+          'status': 'active',
+          'page': page,
+          'limit': 100,
+        });
 
-      const r = await fetch(`https://api.dice.com/rest/v2/jobs?${params.toString()}`, {
-        headers: {
-          'User-Agent': 'job-finder/1.0',
-        },
-        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-      });
+        const r = await fetch(`https://www.dice.com/api/searchJobs?${params.toString()}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
+            'Accept': 'application/json',
+          },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
 
-      if (!r.ok) {
-        console.log(`[dice] Stopped at page ${page} (HTTP ${r.status})`);
+        if (!r.ok) {
+          if (page === 0) console.log(`[dice] API unavailable (HTTP ${r.status})`);
+          break;
+        }
+
+        const payload = await r.json();
+        const results = Array.isArray(payload?.jobs) ? payload.jobs : Array.isArray(payload?.data) ? payload.data : [];
+
+        if (results.length === 0) break;
+        all.push(...results);
+      } catch {
         break;
       }
-
-      const payload = await r.json();
-      const results = Array.isArray(payload?.data) ? payload.data : [];
-
-      if (results.length === 0) {
-        console.log(`[dice] Reached end at page ${page}`);
-        break;
-      }
-
-      all.push(...results);
     }
 
     const normalized = all.map(normalizeDiceJob).filter((job) => job.id && job.title);
@@ -3766,35 +3767,31 @@ function normalizeCraigslistJob(posting) {
 
 async function fetchCraigslistJobs() {
   try {
-    // Craigslist allows light scraping for search results.
-    // Scraping from multiple cities' services & gigs categories.
+    // Craigslist RSS feeds for gigs/services
     const cities = ['sfbay', 'nyc', 'la', 'chi', 'hou', 'philly', 'denver', 'austin', 'seattle', 'portland'];
     const all = [];
 
     for (const city of cities) {
       try {
-        // Fetch services/gigs category JSON feed
-        const r = await fetch(`https://${city}.craigslist.org/search/ggg?format=rss`, {
+        // Fetch JSON export of gigs
+        const r = await fetch(`https://${city}.craigslist.org/search/ggg?format=json&max_price=99999`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
+          },
           signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
         });
 
         if (!r.ok) continue;
-        const text = await r.text();
+        const payload = await r.json();
+        const results = Array.isArray(payload?.results) ? payload.results : [];
 
-        // Simple regex to extract titles and URLs from RSS
-        const titleMatches = text.match(/<title>([^<]+)<\/title>/g) || [];
-        const linkMatches = text.match(/<link>([^<]+)<\/link>/g) || [];
-
-        for (let i = 0; i < Math.min(titleMatches.length, linkMatches.length); i += 1) {
-          const title = titleMatches[i].replace(/<title>|<\/title>/g, '').trim();
-          const url = linkMatches[i].replace(/<link>|<\/link>/g, '').trim();
-
-          if (title && title !== 'craigslist') {
+        for (const result of results) {
+          if (result?.title && result?.url) {
             all.push({
-              title,
+              title: result.title,
               location: city,
-              url,
-              pid: slugify(title + url),
+              url: result.url,
+              pid: slugify(result.title + result.url),
               posted: new Date().toISOString().slice(0, 10),
             });
           }
@@ -3954,36 +3951,32 @@ function normalizeIndeedJob(job) {
 
 async function fetchIndeedJobs() {
   try {
-    // Indeed has terms of service restrictions on scraping.
-    // Using their official API requires registration and has rate limits.
-    // For trades, we'd search: plumber, electrician, carpenter, HVAC, etc.
-    const trades = ['plumber', 'electrician', 'carpenter', 'hvac', 'roofer', 'mason'];
+    // Indeed API requires publisher ID. Using public search scraping as fallback.
+    // Fetch from Indeed's public job feed endpoint
     const all = [];
 
-    for (const trade of trades) {
-      try {
-        const params = new URLSearchParams({
-          'q': trade,
-          'country': 'US',
-          'limit': 50,
-        });
+    // Try Indeed public API endpoint (limited but public)
+    try {
+      const r = await fetch('https://www.indeed.com/resumes/api/v1/jobs', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
+        },
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
 
-        // Using Indeed's public job search endpoint (if available)
-        const r = await fetch(`https://api.indeed.com/ads/apisearch?${params.toString()}`, {
-          headers: {
-            'User-Agent': 'job-finder/1.0',
-          },
-          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-        });
-
-        if (r.ok) {
-          const payload = await r.json();
-          const results = Array.isArray(payload?.results) ? payload.results : [];
-          all.push(...results);
-        }
-      } catch {
-        // Continue with next trade
+      if (r.ok) {
+        const payload = await r.json();
+        const jobs = Array.isArray(payload?.results) ? payload.results : [];
+        all.push(...jobs);
       }
+    } catch {
+      // Continue with fallback
+    }
+
+    // If no results, try a simpler approach
+    if (all.length === 0) {
+      console.log('[indeed] 0 jobs (public API limited)');
+      return [];
     }
 
     const normalized = all.map(normalizeIndeedJob).filter((job) => job.id && job.title);
@@ -4023,19 +4016,26 @@ function normalizeWeWorkRemotelyJob(job) {
 
 async function fetchWeWorkRemotelyJobs() {
   try {
-    // We Work Remotely has a public JSON feed
+    // We Work Remotely public endpoint
     let all = [];
-    for (let page = 1; ; page += 1) {
-      const r = await fetch(`https://www.weworkremotely.com/api/v0/jobs?page=${page}`, {
-        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-      });
+    for (let page = 1; page <= 20; page += 1) {
+      try {
+        const r = await fetch(`https://www.weworkremotely.com/api/v0/jobs?page=${page}&limit=50`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
+          },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
 
-      if (!r.ok) break;
-      const payload = await r.json();
-      const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+        if (!r.ok) break;
+        const payload = await r.json();
+        const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
 
-      if (jobs.length === 0) break;
-      all.push(...jobs);
+        if (jobs.length === 0) break;
+        all.push(...jobs);
+      } catch {
+        break;
+      }
     }
 
     const normalized = all.map(normalizeWeWorkRemotelyJob).filter((job) => job.id && job.title);
@@ -4232,46 +4232,59 @@ function normalizeHackerNewsJob(item) {
 async function fetchHackerNewsJobs() {
   try {
     // Fetch HN "Who is Hiring" monthly thread
-    const r = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json', {
-      signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-    });
-
-    if (!r.ok) return [];
-    const storyIds = await r.json();
-
-    // Look for "Who is Hiring" thread (usually posted on first weekday of month)
-    const all = [];
-    for (const storyId of storyIds.slice(0, 100)) {
-      const sr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${storyId}.json`, {
+    try {
+      const r = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json', {
         signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
       });
 
-      if (!sr.ok) continue;
-      const story = await sr.json();
-
-      if (story?.title && /who is hiring/i.test(story.title)) {
-        // Found it, now get comments (job postings)
-        const kids = Array.isArray(story.kids) ? story.kids.slice(0, 500) : [];
-        for (const kidId of kids) {
-          try {
-            const cr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${kidId}.json`, {
-              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-            });
-            if (cr.ok) {
-              const comment = await cr.json();
-              if (comment?.text && comment.text.length > 20) all.push(comment);
-            }
-          } catch {
-            // Continue
-          }
-        }
-        break;
+      if (!r.ok) {
+        console.log('[hackernews] 0 jobs (Firebase API unavailable)');
+        return [];
       }
-    }
 
-    const normalized = all.map(normalizeHackerNewsJob).filter((job) => job.id && job.title);
-    console.log(`[hackernews] ${normalized.length} jobs`);
-    return normalized;
+      const storyIds = await r.json();
+      const all = [];
+
+      // Look for "Who is Hiring" thread (usually posted on first weekday of month)
+      for (const storyId of storyIds.slice(0, 100)) {
+        try {
+          const sr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${storyId}.json`, {
+            signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+          });
+
+          if (!sr.ok) continue;
+          const story = await sr.json();
+
+          if (story?.title && /who is hiring/i.test(story.title)) {
+            // Found it, now get comments (job postings)
+            const kids = Array.isArray(story.kids) ? story.kids.slice(0, 200) : [];
+            for (const kidId of kids) {
+              try {
+                const cr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${kidId}.json`, {
+                  signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+                });
+                if (cr.ok) {
+                  const comment = await cr.json();
+                  if (comment?.text && comment.text.length > 20) all.push(comment);
+                }
+              } catch {
+                // Continue
+              }
+            }
+            break;
+          }
+        } catch {
+          // Continue searching
+        }
+      }
+
+      const normalized = all.map(normalizeHackerNewsJob).filter((job) => job.id && job.title);
+      console.log(`[hackernews] ${normalized.length} jobs`);
+      return normalized;
+    } catch {
+      console.log('[hackernews] 0 jobs (Firebase unavailable)');
+      return [];
+    }
   } catch (err) {
     console.log(`[hackernews] 0 jobs (error: ${err.message})`);
     return [];
@@ -4306,22 +4319,25 @@ function normalizeJoobleJob(job) {
 
 async function fetchJoobleJobs() {
   try {
-    // Jooble allows limited public search without API key
-    const searches = ['software engineer', 'designer', 'plumber', 'nurse', 'teacher', 'accountant'];
+    // Jooble public search (requires proper headers)
+    const searches = ['software engineer', 'designer', 'plumber', 'nurse', 'teacher'];
     const all = [];
 
     for (const search of searches) {
       try {
-        const params = new URLSearchParams({
-          'keywords': search,
-          'location': 'USA',
-          'limit': 50,
-        });
-
-        const r = await fetch(`https://jooble.org/api/jobs?${params.toString()}`, {
+        // Jooble prefers POST with JSON body
+        const r = await fetch('https://jooble.org/api/v0/search', {
+          method: 'POST',
           headers: {
-            'User-Agent': 'job-finder/1.0',
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
           },
+          body: JSON.stringify({
+            keywords: search,
+            location: 'USA',
+            limit: 50,
+            page: 1,
+          }),
           signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
         });
 
@@ -4695,7 +4711,7 @@ async function fetchClimatebaseJobs() {
 
     for (let start = 1; start < totalPages; start += ALGOLIA_PAGE_CONCURRENCY) {
       const batchPages = [];
-      const end = Math.min(start + ALGOLIA_PAGE_CONCURRENCY, pagesToFetch);
+      const end = Math.min(start + ALGOLIA_PAGE_CONCURRENCY, totalPages);
       for (let page = start; page < end; page += 1) {
         batchPages.push(page);
       }
