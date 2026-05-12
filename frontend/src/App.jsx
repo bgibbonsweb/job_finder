@@ -206,6 +206,15 @@ const SOURCE_LABELS = {
   flexjobs: 'FlexJobs',
   porch: 'Porch',
   indeed: 'Indeed',
+  weworkremotely: 'We Work Remotely',
+  angellist: 'AngelList',
+  devto: 'Dev.to',
+  dribbble: 'Dribbble',
+  hackernews: 'Hacker News',
+  jooble: 'Jooble',
+  idealist: 'Idealist',
+  kaggle: 'Kaggle',
+  producthunt: 'Product Hunt',
 }
 
 const JOB_FIELD_LABELS = {

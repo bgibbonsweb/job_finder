@@ -3995,6 +3995,468 @@ async function fetchIndeedJobs() {
   }
 }
 
+// ─── We Work Remotely (Remote Jobs) ────────────────────────────────────────
+
+function normalizeWeWorkRemotelyJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company_name || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.location || 'Remote').trim() || 'Remote';
+  const category = String(job?.job_category || '').trim();
+
+  const sourceText = [title, company, location, category].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `weworkremotely_${job?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: ['Remote'],
+    jobTypes: category ? [category] : [],
+    datePosted: job?.published_at ? String(job.published_at).slice(0, 10) : null,
+    logo: job?.logo_url || null,
+    url: job?.url || 'https://www.weworkremotely.com',
+    source: 'weworkremotely',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchWeWorkRemotelyJobs() {
+  try {
+    // We Work Remotely has a public JSON feed
+    let all = [];
+    for (let page = 1; ; page += 1) {
+      const r = await fetch(`https://www.weworkremotely.com/api/v0/jobs?page=${page}`, {
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+
+      if (!r.ok) break;
+      const payload = await r.json();
+      const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+
+      if (jobs.length === 0) break;
+      all.push(...jobs);
+    }
+
+    const normalized = all.map(normalizeWeWorkRemotelyJob).filter((job) => job.id && job.title);
+    console.log(`[weworkremotely] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[weworkremotely] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── AngelList (Startup Jobs) ──────────────────────────────────────────────
+
+function normalizeAngelListJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.startup?.name || 'Unknown startup').trim() || 'Unknown startup';
+  const locations = Array.isArray(job?.locations)
+    ? job.locations.map((l) => String(l?.name || '').trim()).filter(Boolean)
+    : [String(job?.location || 'Remote').trim() || 'Remote'];
+  const jobTypes = Array.isArray(job?.job_types) ? job.job_types : [];
+  const equity = job?.equity_max ? `${job.equity_max}% equity` : '';
+
+  const sourceText = [title, company, ...locations, ...jobTypes, equity].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `angellist_${job?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations,
+    remotePreferences: (job?.remote === true) ? ['Remote'] : [],
+    jobTypes: [...jobTypes, ...(equity ? [equity] : [])],
+    datePosted: job?.created_at ? String(job.created_at).slice(0, 10) : null,
+    logo: job?.startup?.logo_url || null,
+    url: job?.url || 'https://angel.co/jobs',
+    source: 'angellist',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'startup',
+  });
+}
+
+async function fetchAngelListJobs() {
+  try {
+    // AngelList requires authentication for full API but has public endpoint
+    const all = [];
+    for (let page = 0; page < 20; page += 1) {
+      const params = new URLSearchParams({
+        'page': page,
+        'per_page': 50,
+      });
+
+      const r = await fetch(`https://api.angel.co/1/jobs?${params.toString()}`, {
+        headers: {
+          'User-Agent': 'job-finder/1.0',
+        },
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+
+      if (!r.ok) break;
+      const payload = await r.json();
+      const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+
+      if (jobs.length === 0) break;
+      all.push(...jobs);
+    }
+
+    const normalized = all.map(normalizeAngelListJob).filter((job) => job.id && job.title);
+    console.log(`[angellist] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[angellist] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Dev.to (Developer Jobs via RSS) ──────────────────────────────────────
+
+function normalizeDevToJob(item) {
+  const title = String(item?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(item?.organization_name || 'Unknown company').trim() || 'Unknown company';
+  const location = 'Remote'; // Dev.to jobs are typically remote-friendly
+  const description = String(item?.description || '').substring(0, 200);
+
+  const sourceText = [title, company, description].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `devto_${item?.id || slugify(title + company)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: ['Remote'],
+    jobTypes: ['Development'],
+    datePosted: item?.published_at ? String(item.published_at).slice(0, 10) : null,
+    logo: null,
+    url: item?.url || 'https://dev.to/jobs',
+    source: 'devto',
+    jobField: 'edtech',
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchDevToJobs() {
+  try {
+    // Dev.to has an RSS feed for job listings
+    const r = await fetch('https://dev.to/api/listings?category=cfp-jobs', {
+      headers: {
+        'api-key': process.env.DEVTO_API_KEY || '',
+        'User-Agent': 'job-finder/1.0',
+      },
+      signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+    });
+
+    if (!r.ok) {
+      console.log('[devto] 0 jobs (no API key)');
+      return [];
+    }
+
+    const jobs = await r.json();
+    const all = Array.isArray(jobs) ? jobs : [];
+    const normalized = all.map(normalizeDevToJob).filter((job) => job.id && job.title);
+    console.log(`[devto] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[devto] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Dribbble (Design/Creative Jobs) ──────────────────────────────────────
+
+function normalizeDribbbleJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company?.name || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.location || 'Remote').trim() || 'Remote';
+  const experience = String(job?.experience_level || '').trim();
+
+  const sourceText = [title, company, location, experience, 'design'].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `dribbble_${job?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: (job?.remote === true || location.toLowerCase() === 'remote') ? ['Remote'] : [],
+    jobTypes: ['Design', ...(experience ? [experience] : [])],
+    datePosted: job?.published_at ? String(job.published_at).slice(0, 10) : null,
+    logo: job?.company?.avatar_url || null,
+    url: job?.url || 'https://dribbble.com/jobs',
+    source: 'dribbble',
+    jobField: 'climate', // Default, but design is distinct
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchDribbbleJobs() {
+  try {
+    // Dribbble has a public jobs listing but scraping requires careful handling
+    console.log('[dribbble] 0 jobs (requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[dribbble] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Hacker News "Who is Hiring" (Tech Jobs) ───────────────────────────────
+
+function normalizeHackerNewsJob(item) {
+  const titleMatch = String(item?.text || '').match(/(.+?)\s*\|/);
+  const title = titleMatch ? titleMatch[1].trim() : String(item?.text || '').substring(0, 100).trim();
+  const companyMatch = String(item?.text || '').match(/\|\s*(.+?)(?:\s*\||$)/);
+  const company = companyMatch ? companyMatch[1].trim() : 'HN Posted';
+  const text = String(item?.text || '');
+  const isRemote = /remote|distributed|anywhere/.test(text.toLowerCase());
+  const location = isRemote ? 'Remote' : 'On-site';
+
+  const sourceText = [title, company, text].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `hackernews_${item?.id || slugify(title + company)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: isRemote ? ['Remote'] : [],
+    jobTypes: ['Engineering'],
+    datePosted: item?.time ? new Date(item.time * 1000).toISOString().slice(0, 10) : null,
+    logo: null,
+    url: item?.url || `https://news.ycombinator.com/item?id=${item?.id}`,
+    source: 'hackernews',
+    jobField: 'climate',
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchHackerNewsJobs() {
+  try {
+    // Fetch HN "Who is Hiring" monthly thread
+    const r = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json', {
+      signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+    });
+
+    if (!r.ok) return [];
+    const storyIds = await r.json();
+
+    // Look for "Who is Hiring" thread (usually posted on first weekday of month)
+    const all = [];
+    for (const storyId of storyIds.slice(0, 100)) {
+      const sr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${storyId}.json`, {
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+
+      if (!sr.ok) continue;
+      const story = await sr.json();
+
+      if (story?.title && /who is hiring/i.test(story.title)) {
+        // Found it, now get comments (job postings)
+        const kids = Array.isArray(story.kids) ? story.kids.slice(0, 500) : [];
+        for (const kidId of kids) {
+          try {
+            const cr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${kidId}.json`, {
+              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+            });
+            if (cr.ok) {
+              const comment = await cr.json();
+              if (comment?.text && comment.text.length > 20) all.push(comment);
+            }
+          } catch {
+            // Continue
+          }
+        }
+        break;
+      }
+    }
+
+    const normalized = all.map(normalizeHackerNewsJob).filter((job) => job.id && job.title);
+    console.log(`[hackernews] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[hackernews] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Jooble (Job Aggregator - Public Search) ──────────────────────────────
+
+function normalizeJoobleJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.location || 'Multiple Locations').trim() || 'Multiple Locations';
+  const snippet = String(job?.snippet || '').substring(0, 200);
+
+  const sourceText = [title, company, location, snippet].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `jooble_${job?.id || slugify(`${company}_${title}_${location}`)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: [],
+    jobTypes: [],
+    datePosted: null,
+    logo: null,
+    url: job?.link || 'https://jooble.org',
+    source: 'jooble',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchJoobleJobs() {
+  try {
+    // Jooble allows limited public search without API key
+    const searches = ['software engineer', 'designer', 'plumber', 'nurse', 'teacher', 'accountant'];
+    const all = [];
+
+    for (const search of searches) {
+      try {
+        const params = new URLSearchParams({
+          'keywords': search,
+          'location': 'USA',
+          'limit': 50,
+        });
+
+        const r = await fetch(`https://jooble.org/api/jobs?${params.toString()}`, {
+          headers: {
+            'User-Agent': 'job-finder/1.0',
+          },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
+
+        if (r.ok) {
+          const payload = await r.json();
+          const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+          all.push(...jobs);
+        }
+      } catch {
+        // Continue with next search
+      }
+    }
+
+    const normalized = all.map(normalizeJoobleJob).filter((job) => job.id && job.title);
+    console.log(`[jooble] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[jooble] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Idealist.org (Nonprofit/NGO Jobs) ────────────────────────────────────
+
+function normalizeIdealistJob(posting) {
+  const title = String(posting?.title || 'Untitled role').trim() || 'Untitled role';
+  const org = String(posting?.organization?.name || 'Unknown organization').trim() || 'Unknown organization';
+  const locations = Array.isArray(posting?.locations)
+    ? posting.locations.map((l) => String(l?.city || l?.country || '').trim()).filter(Boolean)
+    : [String(posting?.location || 'Multiple Locations').trim() || 'Multiple Locations'];
+  const type = String(posting?.posting_type || 'Position').trim();
+
+  const sourceText = [title, org, type, 'nonprofit'].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `idealist_${posting?.id || slugify(`${org}_${title}`)}`,
+    title,
+    company: org,
+    locations: locations.length > 0 ? locations : ['Multiple Locations'],
+    remotePreferences: [],
+    jobTypes: [type],
+    datePosted: posting?.updated_at ? String(posting.updated_at).slice(0, 10) : null,
+    logo: null,
+    url: posting?.url || 'https://www.idealist.org',
+    source: 'idealist',
+    jobField: 'globalhealth',
+    companySize: 'small',
+  });
+}
+
+async function fetchIdealistJobs() {
+  try {
+    // Idealist.org has limited public API access
+    console.log('[idealist] 0 jobs (requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[idealist] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Kaggle (Data Science Jobs) ───────────────────────────────────────────
+
+function normalizeKaggleJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company?.name || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.location || 'Remote').trim() || 'Remote';
+  const salaryMin = job?.salary_min ? `$${job.salary_min}k` : '';
+
+  const sourceText = [title, company, location, 'data science', salaryMin].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `kaggle_${job?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: (job?.remote === true) ? ['Remote'] : [],
+    jobTypes: ['Data Science', ...(salaryMin ? [salaryMin] : [])],
+    datePosted: job?.posted_date ? String(job.posted_date).slice(0, 10) : null,
+    logo: null,
+    url: job?.url || 'https://www.kaggle.com/jobs',
+    source: 'kaggle',
+    jobField: 'edtech',
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchKaggleJobs() {
+  try {
+    // Kaggle has a public jobs page but requires scraping or membership
+    console.log('[kaggle] 0 jobs (requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[kaggle] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Product Hunt (Startup/Product Jobs) ──────────────────────────────────
+
+function normalizeProductHuntJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company?.name || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.location || 'Remote').trim() || 'Remote';
+  const category = String(job?.category || 'Product').trim();
+
+  const sourceText = [title, company, location, category, 'startup'].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `producthunt_${job?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: (job?.remote === true || location.toLowerCase() === 'remote') ? ['Remote'] : [],
+    jobTypes: [category],
+    datePosted: job?.created_at ? String(job.created_at).slice(0, 10) : null,
+    logo: job?.company?.image_url || null,
+    url: job?.url || 'https://www.producthunt.com/jobs',
+    source: 'producthunt',
+    jobField: 'climate',
+    companySize: 'startup',
+  });
+}
+
+async function fetchProductHuntJobs() {
+  try {
+    // Product Hunt jobs require API key or scraping
+    console.log('[producthunt] 0 jobs (requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[producthunt] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
 // ─── Combined Ingestion ────────────────────────────────────────────────────
 async function fetchAllJobs() {
   const [
@@ -4020,6 +4482,15 @@ async function fetchAllJobs() {
     flexjobsJobs,
     porchJobs,
     indeedJobs,
+    weworkremotelyJobs,
+    angellistJobs,
+    devtoJobs,
+    dribbbleJobs,
+    hackerNewsJobs,
+    joobleJobs,
+    idealistJobs,
+    kaggleJobs,
+    producthuntJobs,
   ] = await Promise.all([
     fetchClimatebaseJobs(),
     fetchGreenhouseJobs(),
@@ -4043,6 +4514,15 @@ async function fetchAllJobs() {
     fetchFlexJobsJobs(),
     fetchPorchJobs(),
     fetchIndeedJobs(),
+    fetchWeWorkRemotelyJobs(),
+    fetchAngelListJobs(),
+    fetchDevToJobs(),
+    fetchDribbbleJobs(),
+    fetchHackerNewsJobs(),
+    fetchJoobleJobs(),
+    fetchIdealistJobs(),
+    fetchKaggleJobs(),
+    fetchProductHuntJobs(),
   ]);
 
   // Deduplicate by source-specific identity first so cross-platform duplicates are retained.
@@ -4072,6 +4552,15 @@ async function fetchAllJobs() {
     ...flexjobsJobs,
     ...porchJobs,
     ...indeedJobs,
+    ...weworkremotelyJobs,
+    ...angellistJobs,
+    ...devtoJobs,
+    ...dribbbleJobs,
+    ...hackerNewsJobs,
+    ...joobleJobs,
+    ...idealistJobs,
+    ...kaggleJobs,
+    ...producthuntJobs,
   ]) {
     const source = String(job?.source || '').trim().toLowerCase();
     const stableId = String(job?.id || '').trim();
@@ -4106,7 +4595,16 @@ async function fetchAllJobs() {
     ` angieslist: ${angieslistJobs.length},` +
     ` flexjobs: ${flexjobsJobs.length},` +
     ` porch: ${porchJobs.length},` +
-    ` indeed: ${indeedJobs.length})`,
+    ` indeed: ${indeedJobs.length},` +
+    ` weworkremotely: ${weworkremotelyJobs.length},` +
+    ` angellist: ${angellistJobs.length},` +
+    ` devto: ${devtoJobs.length},` +
+    ` dribbble: ${dribbbleJobs.length},` +
+    ` hackernews: ${hackerNewsJobs.length},` +
+    ` jooble: ${joobleJobs.length},` +
+    ` idealist: ${idealistJobs.length},` +
+    ` kaggle: ${kaggleJobs.length},` +
+    ` producthunt: ${producthuntJobs.length})`,
   );
   return all;
 }
