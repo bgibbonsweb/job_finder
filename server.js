@@ -1813,6 +1813,24 @@ function slugify(value) {
     .replace(/^-+|-+$/g, '');
 }
 
+// Parse RSS 2.0 XML into plain objects. Handles CDATA and self-closing <link/>.
+function parseRssItems(xml) {
+  const items = [];
+  const itemRe = /<item>([\s\S]*?)<\/item>/g;
+  let m;
+  while ((m = itemRe.exec(xml)) !== null) {
+    const b = m[1];
+    const title = (b.match(/<title>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/title>/) || [])[1] || '';
+    const linkRaw = (b.match(/<link>([\s\S]*?)<\/link>/) || [])[1] || '';
+    const guidRaw = (b.match(/<guid[^>]*>([\s\S]*?)<\/guid>/) || [])[1] || '';
+    const link = linkRaw.trim() || guidRaw.trim();
+    const pubDate = (b.match(/<pubDate>([\s\S]*?)<\/pubDate>/) || [])[1] || '';
+    const description = (b.match(/<description>(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?<\/description>/) || [])[1] || '';
+    if (title.trim()) items.push({ title: title.trim(), link, pubDate: pubDate.trim(), description: description.trim() });
+  }
+  return items;
+}
+
 function normalizeJobType(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -3620,82 +3638,50 @@ async function fetchUpworkJobs() {
   }
 }
 
-// ─── Dice (Tech & Trades) ──────────────────────────────────────────────────
+// ─── Working Nomads (Remote Jobs Aggregator – replaces Dice) ─────────────────
 
-function normalizeDiceJob(hit) {
-  const title = String(hit?.jobTitle || 'Untitled role').trim() || 'Untitled role';
-  const company = String(hit?.company || 'Unknown company').trim() || 'Unknown company';
-  const locations = [];
-  if (hit?.city) locations.push(hit.city);
-  if (hit?.state) locations.push(hit.state);
-  if (hit?.country) locations.push(hit.country);
-
-  const isRemote = String(hit?.isRemote || 'false').toLowerCase() === 'true';
-  const sourceText = [
-    title,
-    company,
-    ...locations,
-    hit?.jobDescription || '',
-  ].join(' ');
+function normalizeWorkingNomadsJob(job) {
+  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(job?.company || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.job_location || 'Remote').trim() || 'Remote';
+  const category = String(job?.category || '').trim();
+  const type = String(job?.job_type || '').trim();
+  const sourceText = [title, company, location, category, type].join(' ');
 
   return hydrateEndProductCategory({
-    id: `dice_${hit?.jobId || slugify(`${company}_${title}`)}`,
+    id: `workingnomads_${job?.id || slugify(`${company}_${title}`)}`,
     title,
     company,
-    locations: locations.length > 0 ? locations : ['Multiple Locations'],
-    remotePreferences: isRemote ? ['Remote'] : [],
-    jobTypes: [],
-    datePosted: hit?.postedDate ? String(hit.postedDate).slice(0, 10) : null,
+    locations: [location],
+    remotePreferences: ['Remote'],
+    jobTypes: [type, category].filter(Boolean),
+    datePosted: job?.publish_date ? String(job.publish_date).slice(0, 10) : null,
     logo: null,
-    url: hit?.jobUrl || `https://www.dice.com/jobs?q=${encodeURIComponent(title)}`,
-    source: 'dice',
+    url: job?.url || 'https://www.workingnomads.com/jobs',
+    source: 'workingnomads',
     jobField: inferJobFieldFromText(sourceText),
     companySize: classifyCompanySize(company),
   });
 }
 
-
-
 async function fetchDiceJobs() {
   try {
-    // Dice public search endpoint
-    const all = [];
-    for (let page = 0; page < 10; page += 1) {
-      try {
-        const params = new URLSearchParams({
-          'status': 'active',
-          'page': page,
-          'limit': 100,
-        });
-
-        const r = await fetch(`https://www.dice.com/api/searchJobs?${params.toString()}`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
-            'Accept': 'application/json',
-          },
-          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-        });
-
-        if (!r.ok) {
-          if (page === 0) console.log(`[dice] API unavailable (HTTP ${r.status})`);
-          break;
-        }
-
-        const payload = await r.json();
-        const results = Array.isArray(payload?.jobs) ? payload.jobs : Array.isArray(payload?.data) ? payload.data : [];
-
-        if (results.length === 0) break;
-        all.push(...results);
-      } catch {
-        break;
-      }
+    // Working Nomads public REST API — no auth required. Replaces defunct Dice integration.
+    const r = await fetch('https://www.workingnomads.com/api/exposed_jobs/', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+      signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+    });
+    if (!r.ok) {
+      console.log(`[workingnomads] 0 jobs (HTTP ${r.status})`);
+      return [];
     }
-
-    const normalized = all.map(normalizeDiceJob).filter((job) => job.id && job.title);
-    console.log(`[dice] ${normalized.length} jobs`);
+    const payload = await r.json();
+    const jobs = Array.isArray(payload) ? payload : Array.isArray(payload?.jobs) ? payload.jobs : [];
+    const normalized = jobs.map(normalizeWorkingNomadsJob).filter((j) => j.id && j.title);
+    console.log(`[workingnomads] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
-    console.log(`[dice] 0 jobs (error: ${err.message})`);
+    console.log(`[workingnomads] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
@@ -3767,41 +3753,41 @@ function normalizeCraigslistJob(posting) {
 
 async function fetchCraigslistJobs() {
   try {
-    // Craigslist RSS feeds for gigs/services
-    const cities = ['sfbay', 'nyc', 'la', 'chi', 'hou', 'philly', 'denver', 'austin', 'seattle', 'portland'];
+    // Craigslist RSS for jobs (jjj) and gigs (ggg) — <guid> holds the URL, not <link>
+    const cities = [
+      'sfbay', 'newyork', 'losangeles', 'chicago', 'houston',
+      'philadelphia', 'denver', 'austin', 'seattle', 'portland',
+    ];
+    const categories = ['jjj', 'ggg']; // jobs + gigs
     const all = [];
 
     for (const city of cities) {
-      try {
-        // Fetch JSON export of gigs
-        const r = await fetch(`https://${city}.craigslist.org/search/ggg?format=json&max_price=99999`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
-          },
-          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-        });
-
-        if (!r.ok) continue;
-        const payload = await r.json();
-        const results = Array.isArray(payload?.results) ? payload.results : [];
-
-        for (const result of results) {
-          if (result?.title && result?.url) {
-            all.push({
-              title: result.title,
-              location: city,
-              url: result.url,
-              pid: slugify(result.title + result.url),
-              posted: new Date().toISOString().slice(0, 10),
-            });
+      for (const cat of categories) {
+        try {
+          const r = await fetch(`https://${city}.craigslist.org/search/${cat}?format=rss`, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+            signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+          });
+          if (!r.ok) continue;
+          const items = parseRssItems(await r.text());
+          for (const item of items) {
+            if (item.title && item.link) {
+              all.push({
+                title: item.title,
+                location: city,
+                url: item.link,
+                pid: slugify(item.title + item.link),
+                posted: item.pubDate
+                  ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return new Date().toISOString().slice(0, 10); } })()
+                  : new Date().toISOString().slice(0, 10),
+              });
+            }
           }
-        }
-      } catch {
-        // Continue with next city
+        } catch { continue; }
       }
     }
 
-    const normalized = all.map(normalizeCraigslistJob).filter((job) => job.id && job.title);
+    const normalized = all.map(normalizeCraigslistJob).filter((j) => j.id && j.title);
     console.log(`[craigslist] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
@@ -3924,26 +3910,29 @@ async function fetchPorchJobs() {
   }
 }
 
-// ─── Indeed Trades Search (Web Scraping) ─────────────────────────────────────
+// ─── Jobicy (Remote Jobs public API – replaces Indeed) ──────────────────────
 
-function normalizeIndeedJob(job) {
+function normalizeJobicyJob(job) {
   const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
-  const company = String(job?.company || 'Unknown company').trim() || 'Unknown company';
-  const location = String(job?.location || 'Multiple Locations').trim() || 'Multiple Locations';
-
-  const sourceText = [title, company, location, String(job?.snippet || '')].join(' ');
+  const company = String(job?.companyName || 'Unknown company').trim() || 'Unknown company';
+  const location = String(job?.jobGeo || 'Worldwide').trim() || 'Worldwide';
+  const industry = Array.isArray(job?.jobIndustry) ? job.jobIndustry.join(' ') : String(job?.jobIndustry || '');
+  const level = String(job?.jobLevel || '');
+  const type = String(job?.jobType || '');
+  const isRemote = !job?.jobGeo || /remote|worldwide/i.test(location);
+  const sourceText = [title, company, location, industry, level, type].join(' ');
 
   return hydrateEndProductCategory({
-    id: `indeed_${job?.job_key || slugify(`${company}_${title}_${location}`)}`,
+    id: `jobicy_${job?.id || slugify(`${company}_${title}`)}`,
     title,
     company,
     locations: [location],
-    remotePreferences: (job?.remote === true) ? ['Remote'] : [],
-    jobTypes: [],
-    datePosted: job?.posted_date ? String(job.posted_date).slice(0, 10) : null,
-    logo: job?.company_logo_url || null,
-    url: job?.apply_url || `https://indeed.com/viewjob?jk=${job?.job_key || ''}`,
-    source: 'indeed',
+    remotePreferences: isRemote ? ['Remote'] : [],
+    jobTypes: [type, level].filter(Boolean),
+    datePosted: job?.publishedAt ? String(job.publishedAt).slice(0, 10) : null,
+    logo: job?.companyLogo || null,
+    url: job?.url || 'https://jobicy.com',
+    source: 'jobicy',
     jobField: inferJobFieldFromText(sourceText),
     companySize: classifyCompanySize(company),
   });
@@ -3951,63 +3940,54 @@ function normalizeIndeedJob(job) {
 
 async function fetchIndeedJobs() {
   try {
-    // Indeed API requires publisher ID. Using public search scraping as fallback.
-    // Fetch from Indeed's public job feed endpoint
+    // Jobicy public REST API — no auth required. Replaces defunct Indeed integration.
     const all = [];
-
-    // Try Indeed public API endpoint (limited but public)
-    try {
-      const r = await fetch('https://www.indeed.com/resumes/api/v1/jobs', {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
-        },
-        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-      });
-
-      if (r.ok) {
+    const variants = [
+      new URLSearchParams({ count: 50 }),
+      new URLSearchParams({ count: 50, geo: 'usa' }),
+    ];
+    for (const params of variants) {
+      try {
+        const r = await fetch(`https://jobicy.com/api/v2/remote-jobs?${params}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
+        if (!r.ok) break;
         const payload = await r.json();
-        const jobs = Array.isArray(payload?.results) ? payload.results : [];
+        const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
         all.push(...jobs);
-      }
-    } catch {
-      // Continue with fallback
+      } catch { break; }
     }
-
-    // If no results, try a simpler approach
-    if (all.length === 0) {
-      console.log('[indeed] 0 jobs (public API limited)');
-      return [];
-    }
-
-    const normalized = all.map(normalizeIndeedJob).filter((job) => job.id && job.title);
-    console.log(`[indeed] ${normalized.length} jobs`);
+    const normalized = all.map(normalizeJobicyJob).filter((j) => j.id && j.title);
+    console.log(`[jobicy] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
-    console.log(`[indeed] 0 jobs (error: ${err.message})`);
+    console.log(`[jobicy] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
 
-// ─── We Work Remotely (Remote Jobs) ────────────────────────────────────────
+// ─── We Work Remotely (Remote Jobs via RSS) ────────────────────────────────
 
-function normalizeWeWorkRemotelyJob(job) {
-  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
-  const company = String(job?.company_name || 'Unknown company').trim() || 'Unknown company';
-  const location = String(job?.location || 'Remote').trim() || 'Remote';
-  const category = String(job?.job_category || '').trim();
-
-  const sourceText = [title, company, location, category].join(' ');
+function normalizeWeWorkRemotelyJob(item) {
+  // WWR RSS title format: "Company Name: Job Title"
+  const rawTitle = String(item?.title || '').trim();
+  const colonIdx = rawTitle.indexOf(': ');
+  const company = colonIdx > 0 ? rawTitle.slice(0, colonIdx).trim() : 'Unknown company';
+  const title = colonIdx > 0 ? rawTitle.slice(colonIdx + 2).trim() : rawTitle || 'Untitled role';
+  const description = String(item?.description || '').replace(/<[^>]+>/g, ' ').substring(0, 200);
+  const sourceText = [title, company, description].join(' ');
 
   return hydrateEndProductCategory({
-    id: `weworkremotely_${job?.id || slugify(`${company}_${title}`)}`,
-    title,
-    company,
-    locations: [location],
+    id: `weworkremotely_${slugify(rawTitle + (item?.link || ''))}`,
+    title: title || 'Untitled role',
+    company: company || 'Unknown company',
+    locations: ['Remote'],
     remotePreferences: ['Remote'],
-    jobTypes: category ? [category] : [],
-    datePosted: job?.published_at ? String(job.published_at).slice(0, 10) : null,
-    logo: job?.logo_url || null,
-    url: job?.url || 'https://www.weworkremotely.com',
+    jobTypes: [],
+    datePosted: item?.pubDate ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return null; } })() : null,
+    logo: null,
+    url: item?.link || 'https://www.weworkremotely.com',
     source: 'weworkremotely',
     jobField: inferJobFieldFromText(sourceText),
     companySize: classifyCompanySize(company),
@@ -4016,29 +3996,28 @@ function normalizeWeWorkRemotelyJob(job) {
 
 async function fetchWeWorkRemotelyJobs() {
   try {
-    // We Work Remotely public endpoint
-    let all = [];
-    for (let page = 1; page <= 20; page += 1) {
+    const feeds = [
+      'https://weworkremotely.com/categories/remote-programming-jobs.rss',
+      'https://weworkremotely.com/categories/remote-design-jobs.rss',
+      'https://weworkremotely.com/categories/remote-devops-sysadmin-jobs.rss',
+      'https://weworkremotely.com/categories/remote-product-management-jobs.rss',
+      'https://weworkremotely.com/categories/remote-marketing-jobs.rss',
+      'https://weworkremotely.com/categories/remote-finance-legal-jobs.rss',
+      'https://weworkremotely.com/categories/remote-writing-jobs.rss',
+      'https://weworkremotely.com/categories/remote-customer-support-jobs.rss',
+    ];
+    const all = [];
+    for (const feed of feeds) {
       try {
-        const r = await fetch(`https://www.weworkremotely.com/api/v0/jobs?page=${page}&limit=50`, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
-          },
+        const r = await fetch(feed, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
           signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
         });
-
-        if (!r.ok) break;
-        const payload = await r.json();
-        const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-
-        if (jobs.length === 0) break;
-        all.push(...jobs);
-      } catch {
-        break;
-      }
+        if (!r.ok) continue;
+        all.push(...parseRssItems(await r.text()));
+      } catch { continue; }
     }
-
-    const normalized = all.map(normalizeWeWorkRemotelyJob).filter((job) => job.id && job.title);
+    const normalized = all.map(normalizeWeWorkRemotelyJob).filter((j) => j.id && j.title);
     console.log(`[weworkremotely] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
@@ -4047,30 +4026,24 @@ async function fetchWeWorkRemotelyJobs() {
   }
 }
 
-// ─── AngelList (Startup Jobs) ──────────────────────────────────────────────
+// ─── Remote.co (Remote Jobs RSS — replaces AngelList) ──────────────────────
 
-function normalizeAngelListJob(job) {
-  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
-  const company = String(job?.startup?.name || 'Unknown startup').trim() || 'Unknown startup';
-  const locations = Array.isArray(job?.locations)
-    ? job.locations.map((l) => String(l?.name || '').trim()).filter(Boolean)
-    : [String(job?.location || 'Remote').trim() || 'Remote'];
-  const jobTypes = Array.isArray(job?.job_types) ? job.job_types : [];
-  const equity = job?.equity_max ? `${job.equity_max}% equity` : '';
-
-  const sourceText = [title, company, ...locations, ...jobTypes, equity].join(' ');
+function normalizeRemoteCoJob(item) {
+  const rawTitle = String(item?.title || '').trim();
+  const description = String(item?.description || '').replace(/<[^>]+>/g, ' ').substring(0, 200);
+  const sourceText = [rawTitle, description].join(' ');
 
   return hydrateEndProductCategory({
-    id: `angellist_${job?.id || slugify(`${company}_${title}`)}`,
-    title,
-    company,
-    locations,
-    remotePreferences: (job?.remote === true) ? ['Remote'] : [],
-    jobTypes: [...jobTypes, ...(equity ? [equity] : [])],
-    datePosted: job?.created_at ? String(job.created_at).slice(0, 10) : null,
-    logo: job?.startup?.logo_url || null,
-    url: job?.url || 'https://angel.co/jobs',
-    source: 'angellist',
+    id: `remoteco_${slugify(rawTitle + (item?.link || ''))}`,
+    title: rawTitle || 'Untitled role',
+    company: 'Remote Company',
+    locations: ['Remote'],
+    remotePreferences: ['Remote'],
+    jobTypes: [],
+    datePosted: item?.pubDate ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return null; } })() : null,
+    logo: null,
+    url: item?.link || 'https://remote.co/remote-jobs/',
+    source: 'remoteco',
     jobField: inferJobFieldFromText(sourceText),
     companySize: 'startup',
   });
@@ -4078,87 +4051,84 @@ function normalizeAngelListJob(job) {
 
 async function fetchAngelListJobs() {
   try {
-    // AngelList requires authentication for full API but has public endpoint
+    // Remote.co public RSS feeds — replaces defunct AngelList API
+    const feeds = [
+      'https://remote.co/remote-jobs/developer/feed/',
+      'https://remote.co/remote-jobs/designer/feed/',
+      'https://remote.co/remote-jobs/manager-director/feed/',
+      'https://remote.co/remote-jobs/writer/feed/',
+      'https://remote.co/remote-jobs/customer-service/feed/',
+      'https://remote.co/remote-jobs/sales/feed/',
+      'https://remote.co/remote-jobs/recruiter/feed/',
+    ];
     const all = [];
-    for (let page = 0; page < 20; page += 1) {
-      const params = new URLSearchParams({
-        'page': page,
-        'per_page': 50,
-      });
-
-      const r = await fetch(`https://api.angel.co/1/jobs?${params.toString()}`, {
-        headers: {
-          'User-Agent': 'job-finder/1.0',
-        },
-        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-      });
-
-      if (!r.ok) break;
-      const payload = await r.json();
-      const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-
-      if (jobs.length === 0) break;
-      all.push(...jobs);
+    for (const feed of feeds) {
+      try {
+        const r = await fetch(feed, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
+        if (!r.ok) continue;
+        all.push(...parseRssItems(await r.text()));
+      } catch { continue; }
     }
-
-    const normalized = all.map(normalizeAngelListJob).filter((job) => job.id && job.title);
-    console.log(`[angellist] ${normalized.length} jobs`);
+    const normalized = all.map(normalizeRemoteCoJob).filter((j) => j.id && j.title);
+    console.log(`[remoteco] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
-    console.log(`[angellist] 0 jobs (error: ${err.message})`);
+    console.log(`[remoteco] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
 
-// ─── Dev.to (Developer Jobs via RSS) ──────────────────────────────────────
+// ─── Python.org Jobs (Developer Jobs JSON — replaces Dev.to) ─────────────
 
-function normalizeDevToJob(item) {
+function normalizePythonOrgJob(item) {
   const title = String(item?.title || 'Untitled role').trim() || 'Untitled role';
-  const company = String(item?.organization_name || 'Unknown company').trim() || 'Unknown company';
-  const location = 'Remote'; // Dev.to jobs are typically remote-friendly
-  const description = String(item?.description || '').substring(0, 200);
-
-  const sourceText = [title, company, description].join(' ');
+  const company = String(
+    item?.author?.name || (Array.isArray(item?.authors) && item.authors[0]?.name) || 'Unknown company'
+  ).trim() || 'Unknown company';
+  const tags = Array.isArray(item?.tags) ? item.tags : [];
+  const locationTag = tags.find((t) => /^location:/i.test(t));
+  const location = locationTag ? locationTag.replace(/^location:/i, '').trim() : 'Multiple Locations';
+  const description = String(item?.summary || item?.content_text || '').substring(0, 200);
+  const isRemote = /remote/i.test(location + ' ' + description);
+  const sourceText = [title, company, location, ...tags, description].join(' ');
 
   return hydrateEndProductCategory({
-    id: `devto_${item?.id || slugify(title + company)}`,
+    id: `pythondotorg_${item?.id || slugify(title + company)}`,
     title,
     company,
     locations: [location],
-    remotePreferences: ['Remote'],
-    jobTypes: ['Development'],
-    datePosted: item?.published_at ? String(item.published_at).slice(0, 10) : null,
+    remotePreferences: isRemote ? ['Remote'] : [],
+    jobTypes: tags.filter((t) => !/^location:/i.test(t)).slice(0, 3),
+    datePosted: item?.date_published ? String(item.date_published).slice(0, 10) : null,
     logo: null,
-    url: item?.url || 'https://dev.to/jobs',
-    source: 'devto',
-    jobField: 'edtech',
+    url: item?.url || item?.external_url || 'https://www.python.org/jobs/',
+    source: 'pythondotorg',
+    jobField: inferJobFieldFromText(sourceText),
     companySize: classifyCompanySize(company),
   });
 }
 
 async function fetchDevToJobs() {
   try {
-    // Dev.to has an RSS feed for job listings
-    const r = await fetch('https://dev.to/api/listings?category=cfp-jobs', {
-      headers: {
-        'api-key': process.env.DEVTO_API_KEY || '',
-        'User-Agent': 'job-finder/1.0',
-      },
+    // Python.org jobs JSON Feed — replaces defunct Dev.to jobs board
+    const r = await fetch('https://www.python.org/jobs/feed/json/', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
       signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
     });
-
     if (!r.ok) {
-      console.log('[devto] 0 jobs (no API key)');
+      console.log(`[pythondotorg] 0 jobs (HTTP ${r.status})`);
       return [];
     }
-
-    const jobs = await r.json();
-    const all = Array.isArray(jobs) ? jobs : [];
-    const normalized = all.map(normalizeDevToJob).filter((job) => job.id && job.title);
-    console.log(`[devto] ${normalized.length} jobs`);
+    const payload = await r.json();
+    const items = Array.isArray(payload?.items) ? payload.items : [];
+    const normalized = items.map(normalizePythonOrgJob).filter((j) => j.id && j.title);
+    console.log(`[pythondotorg] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
-    console.log(`[devto] 0 jobs (error: ${err.message})`);
+    console.log(`[pythondotorg] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
@@ -4200,162 +4170,73 @@ async function fetchDribbbleJobs() {
   }
 }
 
-// ─── Hacker News "Who is Hiring" (Tech Jobs) ───────────────────────────────
+// ─── Hacker News "Who is Hiring" (Tech Jobs via Algolia) ──────────────────
 
 function normalizeHackerNewsJob(item) {
-  const titleMatch = String(item?.text || '').match(/(.+?)\s*\|/);
-  const title = titleMatch ? titleMatch[1].trim() : String(item?.text || '').substring(0, 100).trim();
-  const companyMatch = String(item?.text || '').match(/\|\s*(.+?)(?:\s*\||$)/);
-  const company = companyMatch ? companyMatch[1].trim() : 'HN Posted';
-  const text = String(item?.text || '');
-  const isRemote = /remote|distributed|anywhere/.test(text.toLowerCase());
-  const location = isRemote ? 'Remote' : 'On-site';
+  // Supports both Algolia format (comment_text, created_at, objectID) and Firebase format (text, time, id)
+  const rawText = String(item?.comment_text || item?.text || '').replace(/<[^>]+>/g, ' ').trim();
+  const titleMatch = rawText.match(/^([^|\n]{10,100})(?:\s*\||\n)/) || rawText.match(/^(.{10,100})/);
+  const title = titleMatch ? titleMatch[1].trim() : rawText.substring(0, 100).trim();
+  const companyMatch = rawText.match(/\|\s*([^|]+?)\s*(?:\||$)/);
+  const company = companyMatch ? companyMatch[1].trim() : (item?.author || 'HN Hiring');
+  const isRemote = /remote|distributed|anywhere/i.test(rawText);
 
-  const sourceText = [title, company, text].join(' ');
+  const sourceText = rawText;
 
   return hydrateEndProductCategory({
-    id: `hackernews_${item?.id || slugify(title + company)}`,
-    title,
+    id: `hackernews_${item?.objectID || item?.id || slugify(title + company)}`,
+    title: title || 'Untitled role',
     company,
-    locations: [location],
+    locations: [isRemote ? 'Remote' : 'On-site'],
     remotePreferences: isRemote ? ['Remote'] : [],
     jobTypes: ['Engineering'],
-    datePosted: item?.time ? new Date(item.time * 1000).toISOString().slice(0, 10) : null,
+    datePosted: item?.created_at
+      ? String(item.created_at).slice(0, 10)
+      : (item?.time ? new Date(item.time * 1000).toISOString().slice(0, 10) : null),
     logo: null,
-    url: item?.url || `https://news.ycombinator.com/item?id=${item?.id}`,
+    url: item?.url || `https://news.ycombinator.com/item?id=${item?.objectID || item?.id}`,
     source: 'hackernews',
-    jobField: 'climate',
+    jobField: inferJobFieldFromText(sourceText),
     companySize: classifyCompanySize(company),
   });
 }
 
 async function fetchHackerNewsJobs() {
   try {
-    // Fetch HN "Who is Hiring" monthly thread
-    try {
-      const r = await fetch('https://hacker-news.firebaseio.com/v0/topstories.json', {
-        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-      });
-
-      if (!r.ok) {
-        console.log('[hackernews] 0 jobs (Firebase API unavailable)');
-        return [];
-      }
-
-      const storyIds = await r.json();
-      const all = [];
-
-      // Look for "Who is Hiring" thread (usually posted on first weekday of month)
-      for (const storyId of storyIds.slice(0, 100)) {
-        try {
-          const sr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${storyId}.json`, {
-            signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-          });
-
-          if (!sr.ok) continue;
-          const story = await sr.json();
-
-          if (story?.title && /who is hiring/i.test(story.title)) {
-            // Found it, now get comments (job postings)
-            const kids = Array.isArray(story.kids) ? story.kids.slice(0, 200) : [];
-            for (const kidId of kids) {
-              try {
-                const cr = await fetch(`https://hacker-news.firebaseio.com/v0/item/${kidId}.json`, {
-                  signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-                });
-                if (cr.ok) {
-                  const comment = await cr.json();
-                  if (comment?.text && comment.text.length > 20) all.push(comment);
-                }
-              } catch {
-                // Continue
-              }
-            }
-            break;
-          }
-        } catch {
-          // Continue searching
-        }
-      }
-
-      const normalized = all.map(normalizeHackerNewsJob).filter((job) => job.id && job.title);
-      console.log(`[hackernews] ${normalized.length} jobs`);
-      return normalized;
-    } catch {
-      console.log('[hackernews] 0 jobs (Firebase unavailable)');
+    // Step 1: Find the latest "Ask HN: Who is Hiring?" thread via Algolia
+    const searchR = await fetch(
+      'https://hn.algolia.com/api/v1/search?tags=ask_hn,story&query=Ask+HN%3A+Who+is+Hiring%3F&hitsPerPage=1',
+      { headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' }, signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) },
+    );
+    if (!searchR.ok) {
+      console.log('[hackernews] 0 jobs (Algolia unavailable)');
       return [];
     }
-  } catch (err) {
-    console.log(`[hackernews] 0 jobs (error: ${err.message})`);
-    return [];
-  }
-}
-
-// ─── Jooble (Job Aggregator - Public Search) ──────────────────────────────
-
-function normalizeJoobleJob(job) {
-  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
-  const company = String(job?.company || 'Unknown company').trim() || 'Unknown company';
-  const location = String(job?.location || 'Multiple Locations').trim() || 'Multiple Locations';
-  const snippet = String(job?.snippet || '').substring(0, 200);
-
-  const sourceText = [title, company, location, snippet].join(' ');
-
-  return hydrateEndProductCategory({
-    id: `jooble_${job?.id || slugify(`${company}_${title}_${location}`)}`,
-    title,
-    company,
-    locations: [location],
-    remotePreferences: [],
-    jobTypes: [],
-    datePosted: null,
-    logo: null,
-    url: job?.link || 'https://jooble.org',
-    source: 'jooble',
-    jobField: inferJobFieldFromText(sourceText),
-    companySize: classifyCompanySize(company),
-  });
-}
-
-async function fetchJoobleJobs() {
-  try {
-    // Jooble public search (requires proper headers)
-    const searches = ['software engineer', 'designer', 'plumber', 'nurse', 'teacher'];
-    const all = [];
-
-    for (const search of searches) {
-      try {
-        // Jooble prefers POST with JSON body
-        const r = await fetch('https://jooble.org/api/v0/search', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'User-Agent': 'Mozilla/5.0 (job-finder/1.0)',
-          },
-          body: JSON.stringify({
-            keywords: search,
-            location: 'USA',
-            limit: 50,
-            page: 1,
-          }),
-          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-        });
-
-        if (r.ok) {
-          const payload = await r.json();
-          const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-          all.push(...jobs);
-        }
-      } catch {
-        // Continue with next search
-      }
+    const searchPayload = await searchR.json();
+    const thread = searchPayload?.hits?.[0];
+    if (!thread?.objectID) {
+      console.log('[hackernews] 0 jobs (no hiring thread found)');
+      return [];
     }
 
-    const normalized = all.map(normalizeJoobleJob).filter((job) => job.id && job.title);
-    console.log(`[jooble] ${normalized.length} jobs`);
+    // Step 2: Fetch all top-level comments from that story via Algolia
+    const storyId = thread.objectID;
+    const commentsR = await fetch(
+      `https://hn.algolia.com/api/v1/search_by_date?tags=comment,story_${storyId}&hitsPerPage=1000`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' }, signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) },
+    );
+    if (!commentsR.ok) {
+      console.log('[hackernews] 0 jobs (Algolia comments unavailable)');
+      return [];
+    }
+    const commentsPayload = await commentsR.json();
+    const comments = Array.isArray(commentsPayload?.hits) ? commentsPayload.hits : [];
+    const topLevel = comments.filter((c) => String(c?.parent_id) === String(storyId) && c?.comment_text);
+    const normalized = topLevel.map(normalizeHackerNewsJob).filter((j) => j.id && j.title);
+    console.log(`[hackernews] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
-    console.log(`[jooble] 0 jobs (error: ${err.message})`);
+    console.log(`[hackernews] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
