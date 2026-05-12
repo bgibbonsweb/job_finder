@@ -57,6 +57,7 @@ const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 60);
 const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 120000);
 const BUILTIN_FETCH_CONCURRENCY = 8;
 const ARBEITNOW_MAX_PAGES = Number(process.env.ARBEITNOW_MAX_PAGES || 40);
+const THEMUSE_MAX_PAGES = Number(process.env.THEMUSE_MAX_PAGES || 120);
 const TERRA_BOARD_URL = 'https://www.terra.do/climate-jobs/job-board/';
 const EIGHTYKHOURS_APP_ID = 'W6KM1UDIB3';
 const EIGHTYKHOURS_API_KEY = 'd1d7f2c8696e7b36837d5ed337c4a319';
@@ -3439,6 +3440,63 @@ async function fetchArbeitnowJobs() {
   }
 }
 
+function normalizeMuseJob(hit) {
+  const title = String(hit?.name || 'Untitled role').trim() || 'Untitled role';
+  const company = String(hit?.company?.name || 'Unknown company').trim() || 'Unknown company';
+  const locations = toArray(hit?.locations).map((loc) => String(loc?.name || '').trim()).filter(Boolean);
+  const levels = toArray(hit?.levels).map((level) => String(level?.name || '').trim()).filter(Boolean);
+  const categories = toArray(hit?.categories).map((cat) => String(cat?.name || '').trim()).filter(Boolean);
+  const type = String(hit?.type || '').trim();
+  const jobTypes = [...new Set([...levels, ...categories, ...(type ? [type] : [])])];
+  const published = String(hit?.publication_date || '').trim();
+  const sourceText = [title, company, ...jobTypes, String(hit?.contents || '')].join(' ');
+  const remotePreferences = /remote/i.test(sourceText) ? ['Remote'] : [];
+
+  return hydrateEndProductCategory({
+    id: `tm_${hit?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations,
+    remotePreferences,
+    jobTypes,
+    datePosted: published ? published.slice(0, 10) : null,
+    logo: hit?.company?.logo || null,
+    url: hit?.refs?.landing_page || hit?.refs?.job_page || 'https://www.themuse.com/jobs',
+    source: 'themuse',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchTheMuseJobs() {
+  try {
+    const all = [];
+    let page = 1;
+    while (page <= THEMUSE_MAX_PAGES) {
+      const r = await fetch(`https://www.themuse.com/api/public/jobs?page=${page}`, {
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+      if (!r.ok) break;
+
+      const payload = await r.json();
+      const results = Array.isArray(payload?.results) ? payload.results : [];
+      if (results.length === 0) break;
+      all.push(...results);
+
+      const pageCount = Number(payload?.page_count || 0);
+      if ((pageCount > 0 && page >= pageCount) || !payload?.page) break;
+      page += 1;
+    }
+
+    const normalized = all.map(normalizeMuseJob).filter((job) => job.id && job.title);
+    console.log(`[themuse] ${normalized.length} jobs`);
+    return normalized;
+  } catch {
+    console.log('[themuse] 0 jobs');
+    return [];
+  }
+}
+
 // ─── Combined Ingestion ────────────────────────────────────────────────────
 async function fetchAllJobs() {
   const [
@@ -3454,6 +3512,7 @@ async function fetchAllJobs() {
     remoteokJobs,
     remotiveJobs,
     arbeitnowJobs,
+    themuseJobs,
   ] = await Promise.all([
     fetchClimatebaseJobs(),
     fetchGreenhouseJobs(),
@@ -3467,6 +3526,7 @@ async function fetchAllJobs() {
     fetchRemoteOKJobs(),
     fetchRemotiveJobs(),
     fetchArbeitnowJobs(),
+    fetchTheMuseJobs(),
   ]);
 
   // Deduplicate by title+company key; climatebase takes precedence
@@ -3485,6 +3545,7 @@ async function fetchAllJobs() {
     ...remoteokJobs,
     ...remotiveJobs,
     ...arbeitnowJobs,
+    ...themuseJobs,
   ]) {
     const key = `${slugify(job.title)}_${slugify(job.company)}`;
     if (seen.has(key)) continue;
@@ -3505,7 +3566,8 @@ async function fetchAllJobs() {
     ` 80khours: ${eightykJobs.length},` +
     ` remoteok: ${remoteokJobs.length},` +
     ` remotive: ${remotiveJobs.length},` +
-    ` arbeitnow: ${arbeitnowJobs.length})`,
+    ` arbeitnow: ${arbeitnowJobs.length},` +
+    ` themuse: ${themuseJobs.length})`,
   );
   return all;
 }

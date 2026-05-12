@@ -196,6 +196,7 @@ const SOURCE_LABELS = {
   remoteok: 'RemoteOK',
   remotive: 'Remotive',
   arbeitnow: 'Arbeitnow',
+  themuse: 'The Muse',
 }
 
 const JOB_FIELD_LABELS = {
