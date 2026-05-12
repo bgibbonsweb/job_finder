@@ -53,93 +53,6 @@ const OPENCORPORATES_API_TOKEN = String(process.env.OPENCORPORATES_API_TOKEN || 
 const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
 const PERPLEXITY_API_KEY = String(process.env.PERPLEXITY_API_KEY || '').trim();
 const SEC_TICKERS_CACHE_TTL_MS = Number(process.env.SEC_TICKERS_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
-const BUILTIN_SEARCH_TERMS = [
-  // Climate
-  'climate',
-  'sustainability',
-  'clean energy',
-  'climate tech',
-  'decarbonization',
-  'green tech',
-  'renewable energy',
-  'carbon',
-  'energy efficiency',
-  'sustainable',
-  'ESG',
-  'climate action',
-  // EdTech
-  'edtech',
-  'education technology',
-  'online learning',
-  // Mental Health Tech
-  'mental health',
-  'behavioral health',
-  'digital therapeutics',
-  // AgTech / Food Security
-  'agtech',
-  'precision agriculture',
-  'food tech',
-  // Global Health
-  'global health',
-  'digital health lmic',
-  // Humanitarian / Nonprofit
-  'nonprofit',
-  'ngo',
-  'humanitarian',
-  'international development',
-  'refugee',
-  'public health',
-  'social impact',
-  'civic tech',
-  'global development',
-  // Electrification
-  'electric vehicle',
-  'EV charging',
-  'heat pump',
-  'induction cooking',
-  'home electrification',
-  'smart home energy',
-  'building efficiency',
-  'energy efficient homes',
-  // Arts / Museums / Cultural Organizations
-  'museum',
-  'museum curator',
-  'museum educator',
-  'gallery',
-  'art director',
-  'artist',
-  'creative producer',
-  'exhibition designer',
-  'archivist',
-  'librarian',
-  // Broad generic job-market terms
-  'software engineer',
-  'data analyst',
-  'product manager',
-  'project manager',
-  'operations',
-  'marketing',
-  'sales',
-  'customer support',
-  'human resources',
-  'recruiter',
-  'finance',
-  'accounting',
-  'legal',
-  'supply chain',
-  'logistics',
-  'healthcare',
-  'education',
-  'design',
-  'graphic designer',
-  'ux designer',
-  'writer',
-  'editor',
-  'communications',
-  'administrative assistant',
-  'business analyst',
-  'research',
-];
 const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 20);
 const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 30000);
 const BUILTIN_FETCH_CONCURRENCY = 8;
@@ -3227,33 +3140,29 @@ async function fetchBambooJobs() {
 async function fetchBuiltInJobs() {
   const jobUrls = new Set();
 
-  for (const term of BUILTIN_SEARCH_TERMS) {
+  for (let page = 1; page <= BUILTIN_MAX_PAGES; page += 1) {
     if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) {
-      console.log(`[builtin] hit discovered URL cap (${BUILTIN_MAX_DISCOVERED_URLS}), stopping search expansion early`);
+      console.log(`[builtin] hit discovered URL cap (${BUILTIN_MAX_DISCOVERED_URLS}), stopping pagination early`);
       break;
     }
-    for (let page = 1; page <= BUILTIN_MAX_PAGES; page += 1) {
-      const params = new URLSearchParams({ search: term, page: String(page) });
-      const url = `https://builtin.com/jobs?${params.toString()}`;
-      try {
-        const r = await fetch(url, { signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) });
-        if (!r.ok) break;
-        const html = await r.text();
+    const url = `https://builtin.com/jobs?page=${page}`;
+    try {
+      const r = await fetch(url, { signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) });
+      if (!r.ok) break;
+      const html = await r.text();
 
-        const matches = html.match(/https:\/\/builtin\.com\/job\/[^"\s<]+\/\d+/g) || [];
-        const uniqueMatches = Array.from(new Set(matches));
-        if (uniqueMatches.length === 0) break;
-        for (const m of uniqueMatches) {
-          if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) break;
-          jobUrls.add(m);
-        }
-
-        // If we got fewer than a page worth, pagination likely ended.
-        if (uniqueMatches.length < 20) break;
+      const matches = html.match(/https:\/\/builtin\.com\/job\/[^"\s<]+\/\d+/g) || [];
+      const uniqueMatches = Array.from(new Set(matches));
+      if (uniqueMatches.length === 0) break;
+      for (const m of uniqueMatches) {
         if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) break;
-      } catch {
-        break;
+        jobUrls.add(m);
       }
+
+      // If we got fewer than a page worth, pagination likely ended.
+      if (uniqueMatches.length < 20) break;
+    } catch {
+      break;
     }
   }
 
@@ -3353,26 +3262,7 @@ async function loadJobsFromFile() {
 }
 
 // ─── RemoteOK ─────────────────────────────────────────────────────────────
-// Public API, no auth — returns tech/remote jobs
-// We fetch several tag categories relevant to our job fields
-const REMOTEOK_TAGS = [
-  ['dev', 'tech'],
-  ['react', 'tech'],
-  ['node', 'tech'],
-  ['python', 'tech'],
-  ['data', 'tech'],
-  ['design', 'tech'],
-  ['product', 'tech'],
-  ['marketing', 'tech'],
-  ['sales', 'tech'],
-  ['support', 'tech'],
-  ['finance', 'tech'],
-  ['hr', 'tech'],
-  ['legal', 'tech'],
-  ['writing', 'tech'],
-  ['health', 'medical'],
-  ['education', 'edtech'],
-];
+// Public API, no auth — ingest all currently available remote jobs.
 
 function normalizeRemoteOKJob(hit) {
   const title = hit.position || 'Untitled role';
@@ -3402,28 +3292,38 @@ function normalizeRemoteOKJob(hit) {
 }
 
 async function fetchRemoteOKJobs() {
-  const seen = new Set();
-  const all = [];
-  for (const [tag] of REMOTEOK_TAGS) {
-    try {
-      const r = await fetch(`https://remoteok.com/api?tags=${tag}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; job-board-aggregator/1.0)' },
-        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-      });
-      if (!r.ok) continue;
-      const jobs = await r.json();
-      if (!Array.isArray(jobs)) continue;
-      for (const hit of jobs) {
-        if (!hit.id && !hit.slug) continue; // skip legal notice header
-        const key = String(hit.id || hit.slug);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        all.push(normalizeRemoteOKJob(hit));
-      }
-    } catch { /* skip this tag */ }
+  try {
+    const r = await fetch('https://remoteok.com/api', {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; job-board-aggregator/1.0)' },
+      signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+    });
+    if (!r.ok) {
+      console.log('[remoteok] 0 jobs');
+      return [];
+    }
+
+    const jobs = await r.json();
+    if (!Array.isArray(jobs)) {
+      console.log('[remoteok] 0 jobs');
+      return [];
+    }
+
+    const all = [];
+    const seen = new Set();
+    for (const hit of jobs) {
+      if (!hit.id && !hit.slug) continue; // skip legal notice header
+      const key = String(hit.id || hit.slug);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      all.push(normalizeRemoteOKJob(hit));
+    }
+
+    console.log(`[remoteok] ${all.length} jobs`);
+    return all;
+  } catch {
+    console.log('[remoteok] 0 jobs');
+    return [];
   }
-  console.log(`[remoteok] ${all.length} jobs`);
-  return all;
 }
 
 // ─── Combined Ingestion ────────────────────────────────────────────────────
