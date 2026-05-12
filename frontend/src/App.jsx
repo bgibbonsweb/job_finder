@@ -2557,6 +2557,10 @@ function App() {
         Last sync: {lastUpdated ? new Date(lastUpdated).toLocaleString() : 'Pending'}
         {' · '}
         <strong>{cacheMeta.stale ? 'Stale cache' : cacheMeta.fromCache ? 'Cached' : 'Fresh'}</strong>
+        {' · '}
+        <strong>
+          Server jobs: {Number.isFinite(totalAvailable) ? totalAvailable.toLocaleString() : '?'}
+        </strong>
       </p>
 
       {isLoading ? (
