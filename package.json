@@ -4,7 +4,7 @@
   "description": "Basic Node.js server",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "npm --prefix frontend run build && node server.js",
     "dev": "node --watch server.js",
     "test": "node --test 'test/**/*.test.js'",
     "dev:frontend": "npm --prefix frontend run dev",

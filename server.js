@@ -7264,8 +7264,56 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Serve static files from frontend build directory
+  const frontendDistPath = path.join(__dirname, 'frontend', 'dist');
+  const requestedFile = path.join(frontendDistPath, url.pathname);
+  
+  // Normalize path to prevent directory traversal
+  if (requestedFile.startsWith(frontendDistPath) && fs.existsSync(requestedFile) && fs.statSync(requestedFile).isFile()) {
+    const ext = path.extname(requestedFile).toLowerCase();
+    const contentTypeMap = {
+      '.html': 'text/html',
+      '.js': 'application/javascript',
+      '.css': 'text/css',
+      '.json': 'application/json',
+      '.svg': 'image/svg+xml',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.gif': 'image/gif',
+      '.ico': 'image/x-icon',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+    };
+    const contentType = contentTypeMap[ext] || 'application/octet-stream';
+    
+    try {
+      const fileContent = fs.readFileSync(requestedFile);
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(fileContent);
+      return;
+    } catch {
+      // Fall through to index.html
+    }
+  }
+
+  // Serve index.html for all non-API routes (SPA routing)
+  const indexPath = path.join(frontendDistPath, 'index.html');
+  if (fs.existsSync(indexPath)) {
+    try {
+      const indexContent = fs.readFileSync(indexPath, 'utf-8');
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(indexContent);
+      return;
+    } catch {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('Error loading frontend\n');
+      return;
+    }
+  }
+
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Climate jobs backend is running. Try /api/jobs\n');
+  res.end('Climate jobs backend is running. Frontend not yet built. Try /api/jobs\n');
 });
 
 server.listen(PORT, HOST, () => {
