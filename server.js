@@ -53,11 +53,11 @@ const OPENCORPORATES_API_TOKEN = String(process.env.OPENCORPORATES_API_TOKEN || 
 const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
 const PERPLEXITY_API_KEY = String(process.env.PERPLEXITY_API_KEY || '').trim();
 const SEC_TICKERS_CACHE_TTL_MS = Number(process.env.SEC_TICKERS_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
-const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 60);
-const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 120000);
+const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 200);
+const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 500000);
 const BUILTIN_FETCH_CONCURRENCY = 8;
-const ARBEITNOW_MAX_PAGES = Number(process.env.ARBEITNOW_MAX_PAGES || 40);
-const THEMUSE_MAX_PAGES = Number(process.env.THEMUSE_MAX_PAGES || 120);
+const ARBEITNOW_MAX_PAGES = Number(process.env.ARBEITNOW_MAX_PAGES || 200);
+const THEMUSE_MAX_PAGES = Number(process.env.THEMUSE_MAX_PAGES || 1500);
 const TERRA_BOARD_URL = 'https://www.terra.do/climate-jobs/job-board/';
 const EIGHTYKHOURS_APP_ID = 'W6KM1UDIB3';
 const EIGHTYKHOURS_API_KEY = 'd1d7f2c8696e7b36837d5ed337c4a319';
@@ -68,14 +68,14 @@ const ALGOLIA_APP_ID = '8PSNFFQTXQ';
 const ALGOLIA_API_KEY = 'd2ebe27d3cc3d35fea04da7b1b0718a8';
 const ALGOLIA_INDEX = 'Job_production';
 const ALGOLIA_HITS_PER_PAGE = 100;
-const ALGOLIA_MAX_PAGES = Number(process.env.ALGOLIA_MAX_PAGES || 30);
-const ALGOLIA_PAGE_CONCURRENCY = Number(process.env.ALGOLIA_PAGE_CONCURRENCY || 12);
+const ALGOLIA_MAX_PAGES = Number(process.env.ALGOLIA_MAX_PAGES || 120);
+const ALGOLIA_PAGE_CONCURRENCY = Number(process.env.ALGOLIA_PAGE_CONCURRENCY || 16);
 const ALGOLIA_MIN_WINDOW_DAYS = Number(process.env.ALGOLIA_MIN_WINDOW_DAYS || 14);
-const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 8);
-// Max-volume default: last 5 years; override with ALGOLIA_START_EPOCH env var
-const ALGOLIA_START_EPOCH = Number(process.env.ALGOLIA_START_EPOCH || Math.floor((Date.now() - 5 * 365 * 24 * 60 * 60 * 1000) / 1000));
-const ALGOLIA_MAX_TOTAL_JOBS = Number(process.env.ALGOLIA_MAX_TOTAL_JOBS || 180000);
-const ALGOLIA_CATEGORY_CONCURRENCY = Number(process.env.ALGOLIA_CATEGORY_CONCURRENCY || 3);
+const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 10);
+// Ultra-volume default: last 10 years; override with ALGOLIA_START_EPOCH env var
+const ALGOLIA_START_EPOCH = Number(process.env.ALGOLIA_START_EPOCH || Math.floor((Date.now() - 10 * 365 * 24 * 60 * 60 * 1000) / 1000));
+const ALGOLIA_MAX_TOTAL_JOBS = Number(process.env.ALGOLIA_MAX_TOTAL_JOBS || 400000);
+const ALGOLIA_CATEGORY_CONCURRENCY = Number(process.env.ALGOLIA_CATEGORY_CONCURRENCY || 4);
 const ALGOLIA_FETCH_RETRIES = Number(process.env.ALGOLIA_FETCH_RETRIES || 3);
 
 let jobsCache = [];
@@ -3529,7 +3529,8 @@ async function fetchAllJobs() {
     fetchTheMuseJobs(),
   ]);
 
-  // Deduplicate by title+company key; climatebase takes precedence
+  // Deduplicate by source-specific identity first so cross-platform duplicates are retained.
+  // This intentionally favors higher volume over aggressive cross-source collapse.
   const seen = new Set();
   const all = [];
   for (const job of [
@@ -3547,7 +3548,11 @@ async function fetchAllJobs() {
     ...arbeitnowJobs,
     ...themuseJobs,
   ]) {
-    const key = `${slugify(job.title)}_${slugify(job.company)}`;
+    const source = String(job?.source || '').trim().toLowerCase();
+    const stableId = String(job?.id || '').trim();
+    const key = stableId
+      ? `${source}|${stableId}`
+      : `${source}|${slugify(job.title)}_${slugify(job.company)}_${slugify(job.url || '')}`;
     if (seen.has(key)) continue;
     seen.add(key);
     all.push(job);
