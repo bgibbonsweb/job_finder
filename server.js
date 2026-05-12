@@ -101,8 +101,47 @@ const BUILTIN_SEARCH_TERMS = [
   'smart home energy',
   'building efficiency',
   'energy efficient homes',
+  // Arts / Museums / Cultural Organizations
+  'museum',
+  'museum curator',
+  'museum educator',
+  'gallery',
+  'art director',
+  'artist',
+  'creative producer',
+  'exhibition designer',
+  'archivist',
+  'librarian',
+  // Broad generic job-market terms
+  'software engineer',
+  'data analyst',
+  'product manager',
+  'project manager',
+  'operations',
+  'marketing',
+  'sales',
+  'customer support',
+  'human resources',
+  'recruiter',
+  'finance',
+  'accounting',
+  'legal',
+  'supply chain',
+  'logistics',
+  'healthcare',
+  'education',
+  'design',
+  'graphic designer',
+  'ux designer',
+  'writer',
+  'editor',
+  'communications',
+  'administrative assistant',
+  'business analyst',
+  'research',
 ];
-const BUILTIN_MAX_PAGES = 15;
+const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 20);
+const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 30000);
 const BUILTIN_FETCH_CONCURRENCY = 8;
 const TERRA_BOARD_URL = 'https://www.terra.do/climate-jobs/job-board/';
 const EIGHTYKHOURS_APP_ID = 'W6KM1UDIB3';
@@ -295,7 +334,7 @@ function buildResumeBreakdownPayload(record, profile) {
     }))
     : [];
 
-  const skills = Array.isArray(profile?.resumeSkills)
+  const skills = profile?.resumeSkills
     ? Array.from(profile.resumeSkills).slice(0, 20)
     : [];
 
@@ -3189,6 +3228,10 @@ async function fetchBuiltInJobs() {
   const jobUrls = new Set();
 
   for (const term of BUILTIN_SEARCH_TERMS) {
+    if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) {
+      console.log(`[builtin] hit discovered URL cap (${BUILTIN_MAX_DISCOVERED_URLS}), stopping search expansion early`);
+      break;
+    }
     for (let page = 1; page <= BUILTIN_MAX_PAGES; page += 1) {
       const params = new URLSearchParams({ search: term, page: String(page) });
       const url = `https://builtin.com/jobs?${params.toString()}`;
@@ -3200,10 +3243,14 @@ async function fetchBuiltInJobs() {
         const matches = html.match(/https:\/\/builtin\.com\/job\/[^"\s<]+\/\d+/g) || [];
         const uniqueMatches = Array.from(new Set(matches));
         if (uniqueMatches.length === 0) break;
-        for (const m of uniqueMatches) jobUrls.add(m);
+        for (const m of uniqueMatches) {
+          if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) break;
+          jobUrls.add(m);
+        }
 
         // If we got fewer than a page worth, pagination likely ended.
         if (uniqueMatches.length < 20) break;
+        if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) break;
       } catch {
         break;
       }
@@ -3309,8 +3356,22 @@ async function loadJobsFromFile() {
 // Public API, no auth — returns tech/remote jobs
 // We fetch several tag categories relevant to our job fields
 const REMOTEOK_TAGS = [
-  ['dev', 'climate'], ['react', 'climate'], ['node', 'climate'],
-  ['health', 'medical'], ['python', 'climate'], ['data', 'climate'],
+  ['dev', 'tech'],
+  ['react', 'tech'],
+  ['node', 'tech'],
+  ['python', 'tech'],
+  ['data', 'tech'],
+  ['design', 'tech'],
+  ['product', 'tech'],
+  ['marketing', 'tech'],
+  ['sales', 'tech'],
+  ['support', 'tech'],
+  ['finance', 'tech'],
+  ['hr', 'tech'],
+  ['legal', 'tech'],
+  ['writing', 'tech'],
+  ['health', 'medical'],
+  ['education', 'edtech'],
 ];
 
 function normalizeRemoteOKJob(hit) {
@@ -7324,13 +7385,25 @@ const server = http.createServer((req, res) => {
   res.end('Climate jobs backend is running. Frontend not yet built. Try /api/jobs\n');
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`Server running at http://${HOST}:${PORT}`);
-  // Kick off full-site ingestion immediately so the cache is warm before the first request
-  console.log('[cache] Background ingestion starting...');
-  getJobsWithCache().then(({ jobs }) => {
-    console.log(`[cache] Warmup complete — ${jobs.length} jobs cached`);
-  }).catch((err) => {
-    console.error('[cache] Warmup failed:', err.message);
+if (require.main === module) {
+  server.listen(PORT, HOST, () => {
+    console.log(`Server running at http://${HOST}:${PORT}`);
+    // Kick off full-site ingestion immediately so the cache is warm before the first request
+    console.log('[cache] Background ingestion starting...');
+    getJobsWithCache().then(({ jobs }) => {
+      console.log(`[cache] Warmup complete — ${jobs.length} jobs cached`);
+    }).catch((err) => {
+      console.error('[cache] Warmup failed:', err.message);
+    });
   });
-});
+}
+
+module.exports = {
+  buildResumeBreakdownPayload,
+  getResumeComparisonAlgorithmKey,
+  buildCustomResumeProfile,
+  scoreJobAgainstResumeClassic,
+  scoreJobAgainstResumeHybrid,
+  scoreJobAgainstResumeUltra,
+  scoreJobAgainstResume,
+};
