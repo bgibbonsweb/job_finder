@@ -44,6 +44,9 @@ const SESSION_COOKIE_NAME = 'job_finder_session';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
 const ATS_FETCH_CONCURRENCY = 12;
 const ATS_FETCH_TIMEOUT_MS = 8000;
+const INGEST_VOLUME_MULTIPLIER = Math.max(1, Math.min(10, Number(process.env.INGEST_VOLUME_MULTIPLIER || 4)));
+const INGEST_HEALTH_WARN_SLOW_MS = Number(process.env.INGEST_HEALTH_WARN_SLOW_MS || 20000);
+const INGEST_HEALTH_VERBOSE = ['1', 'true', 'yes', 'on'].includes(String(process.env.INGEST_HEALTH_VERBOSE || '').trim().toLowerCase());
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 h — load once per server session
 const CACHE_OFFLINE_ONLY = ['1', 'true', 'yes', 'on'].includes(String(process.env.CACHE_OFFLINE_ONLY || '').trim().toLowerCase());
 const COMPANY_AUDIT_TTL_MS = Number(process.env.COMPANY_AUDIT_TTL_MS || 7 * 24 * 60 * 60 * 1000);
@@ -63,10 +66,10 @@ const EIGHTYKHOURS_INDEX = 'jobs_prod';
 const ALGOLIA_APP_ID = '8PSNFFQTXQ';
 const ALGOLIA_API_KEY = 'd2ebe27d3cc3d35fea04da7b1b0718a8';
 const ALGOLIA_INDEX = 'Job_production';
-const ALGOLIA_HITS_PER_PAGE = 100;
+const ALGOLIA_HITS_PER_PAGE = Number(process.env.ALGOLIA_HITS_PER_PAGE || 100000);
 const ALGOLIA_PAGE_CONCURRENCY = Number(process.env.ALGOLIA_PAGE_CONCURRENCY || 24);
-const ALGOLIA_MIN_WINDOW_DAYS = Number(process.env.ALGOLIA_MIN_WINDOW_DAYS || 14);
-const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 12);
+const ALGOLIA_MIN_WINDOW_DAYS = Number(process.env.ALGOLIA_MIN_WINDOW_DAYS || 0);
+const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 32);
 // Extreme-volume default: start from year 2000; override with ALGOLIA_START_EPOCH env var
 const ALGOLIA_START_EPOCH = Number(process.env.ALGOLIA_START_EPOCH || 946684800);
 const ALGOLIA_CATEGORY_CONCURRENCY = Number(process.env.ALGOLIA_CATEGORY_CONCURRENCY || 6);
@@ -78,10 +81,13 @@ let cacheRefreshPromise = null;
 
 const DERIVED_SCORE_CACHE_MAX = Number(process.env.DERIVED_SCORE_CACHE_MAX || 200000);
 const JOB_SEARCH_CACHE_TTL_MS = Number(process.env.JOB_SEARCH_CACHE_TTL_MS || 5 * 60 * 1000);
-const JOB_SEARCH_CACHE_MAX = Number(process.env.JOB_SEARCH_CACHE_MAX || 30);
+const JOB_SEARCH_CACHE_MAX = Number(process.env.JOB_SEARCH_CACHE_MAX || 30000);
+const JOB_SEARCH_HEALTH_SLOW_MS = Number(process.env.JOB_SEARCH_HEALTH_SLOW_MS || 1500);
+const JOB_SEARCH_HEALTH_VERBOSE = ['1', 'true', 'yes', 'on'].includes(String(process.env.JOB_SEARCH_HEALTH_VERBOSE || '').trim().toLowerCase());
 const REQUEST_PROGRESS_TTL_MS = Number(process.env.REQUEST_PROGRESS_TTL_MS || 2 * 60 * 1000);
-const RESUME_PROFILE_CACHE_MAX = Number(process.env.RESUME_PROFILE_CACHE_MAX || 1000);
-const RESUME_BREAKDOWN_CACHE_MAX = Number(process.env.RESUME_BREAKDOWN_CACHE_MAX || 1000);
+const RESUME_PROFILE_CACHE_MAX = Number(process.env.RESUME_PROFILE_CACHE_MAX || 100000);
+const RESUME_BREAKDOWN_CACHE_MAX = Number(process.env.RESUME_BREAKDOWN_CACHE_MAX || 100000);
+const RESUME_SCORE_FALLBACK_MAX_RAW = Number(process.env.RESUME_SCORE_MAX_RAW || 30000);
 const derivedScoreCache = {
   resume: new Map(),
   impact: new Map(),
@@ -127,6 +133,68 @@ function cleanupExpiredJobSearchCache(now = Date.now()) {
       jobSearchCache.delete(key);
     }
   }
+}
+
+function summarizeTopCounts(counts, limit = 5) {
+  if (!counts || typeof counts !== 'object') return [];
+  return Object.entries(counts)
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .slice(0, limit)
+    .map(([key, value]) => `${key}:${Number(value || 0)}`);
+}
+
+function logJobSearchHealth(event, payload = {}) {
+  const durationMs = Number(payload.durationMs || 0);
+  const totalReturned = Number(payload.totalReturned || 0);
+  const filteredAvailable = Number(payload.filteredAvailable || 0);
+  const anomalies = [];
+
+  if (durationMs >= JOB_SEARCH_HEALTH_SLOW_MS) anomalies.push('slow-search');
+  if (filteredAvailable === 0) anomalies.push('empty-filtered-result');
+  if (totalReturned === 0 && filteredAvailable > 0) anomalies.push('empty-page-window');
+
+  const shouldLog = JOB_SEARCH_HEALTH_VERBOSE || anomalies.length > 0 || event === 'error';
+  if (!shouldLog) return;
+
+  const output = {
+    event,
+    durationMs,
+    requestId: String(payload.requestId || ''),
+    query: String(payload.query || ''),
+    cachePath: String(payload.cachePath || 'unknown'),
+    sortBy: String(payload.sortBy || ''),
+    rankingMode: String(payload.rankingMode || ''),
+    impactMode: String(payload.impactMode || ''),
+    usOnly: Boolean(payload.usOnly),
+    page: {
+      offset: Number(payload.offset || 0),
+      limit: Number(payload.limit || 0),
+      returned: totalReturned,
+      filteredAvailable,
+      totalAvailable: Number(payload.totalAvailable || 0),
+    },
+    cache: {
+      searchCacheHit: Boolean(payload.searchCacheHit),
+      exactRequestCacheHit: Boolean(payload.exactRequestCacheHit),
+      stale: Boolean(payload.stale),
+    },
+    topSources: summarizeTopCounts(payload.sourceCounts, 5),
+    anomalies,
+  };
+
+  if (payload.timingsMs && typeof payload.timingsMs === 'object') {
+    output.timingsMs = Object.fromEntries(
+      Object.entries(payload.timingsMs)
+        .filter(([, value]) => Number.isFinite(Number(value)))
+        .map(([key, value]) => [key, Number(value)]),
+    );
+  }
+
+  if (payload.errorMessage) {
+    output.error = String(payload.errorMessage);
+  }
+
+  console.log(`[search-health] ${JSON.stringify(output)}`);
 }
 
 function stableCsv(value) {
@@ -2251,7 +2319,7 @@ function getResumeScoreCached(job, datasetKey, rankingMode, queryText, resumePro
   const cached = derivedScoreCache.resume.get(cacheKey);
   if (cached && cached.resumeKeywordBreakdown) return cached;
 
-  const computed = scoreJobAgainstResume(job, rankingMode, queryText, resumeProfile);
+  const computed = scoreJobAgainstResume(job, rankingMode, queryText, resumeProfile || RESUME_PROFILES[resumeId]);
   derivedScoreCache.resume.set(cacheKey, computed);
   trimMapCache(derivedScoreCache.resume);
   return computed;
@@ -3544,6 +3612,12 @@ function normalizeUSAJobsJob(hit) {
 
 async function fetchUSAJobsJobs() {
   try {
+    const usajobsApiKey = String(process.env.USAJOBS_API_KEY || '').trim();
+    if (!usajobsApiKey) {
+      console.log('[usajobs] 0 jobs (missing USAJOBS_API_KEY)');
+      return [];
+    }
+
     const all = [];
     const pageSize = 500; // Max per USAJOBS API
     for (let page = 1; ; page += 1) {
@@ -3556,7 +3630,7 @@ async function fetchUSAJobsJobs() {
 
       const r = await fetch(`https://data.usajobs.gov/api/search?${params.toString()}`, {
         headers: {
-          'Authorization-Key': process.env.USAJOBS_API_KEY || 'TESTINGAPIKEYPLACEHOLDER',
+          'Authorization-Key': usajobsApiKey,
           'User-Agent': 'job-finder/1.0',
         },
         signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
@@ -3757,33 +3831,42 @@ async function fetchCraigslistJobs() {
     const cities = [
       'sfbay', 'newyork', 'losangeles', 'chicago', 'houston',
       'philadelphia', 'denver', 'austin', 'seattle', 'portland',
+      'atlanta', 'boston', 'dallas', 'miami', 'phoenix',
+      'washingtondc', 'sandiego', 'minneapolis', 'detroit', 'orlando',
+      'lasvegas', 'charlotte', 'nashville', 'sacramento', 'stlouis',
+      'columbus', 'kansascity', 'cleveland', 'indianapolis', 'milwaukee',
+      'pittsburgh', 'cincinnati', 'raleigh', 'richmond', 'saltlakecity',
+      'neworleans', 'oklahomacity', 'boise', 'albuquerque', 'tampa',
     ];
-    const categories = ['jjj', 'ggg']; // jobs + gigs
+    const categories = ['jjj', 'ggg', 'sof', 'web', 'egr', 'med', 'edu', 'bus'];
+    const offsets = Array.from({ length: Math.max(1, Math.min(6, INGEST_VOLUME_MULTIPLIER + 1)) }, (_, i) => i * 120);
     const all = [];
 
     for (const city of cities) {
       for (const cat of categories) {
-        try {
-          const r = await fetch(`https://${city}.craigslist.org/search/${cat}?format=rss`, {
-            headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
-            signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-          });
-          if (!r.ok) continue;
-          const items = parseRssItems(await r.text());
-          for (const item of items) {
-            if (item.title && item.link) {
-              all.push({
-                title: item.title,
-                location: city,
-                url: item.link,
-                pid: slugify(item.title + item.link),
-                posted: item.pubDate
-                  ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return new Date().toISOString().slice(0, 10); } })()
-                  : new Date().toISOString().slice(0, 10),
-              });
+        for (const offset of offsets) {
+          try {
+            const r = await fetch(`https://${city}.craigslist.org/search/${cat}?format=rss&s=${offset}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+            });
+            if (!r.ok) continue;
+            const items = parseRssItems(await r.text());
+            for (const item of items) {
+              if (item.title && item.link) {
+                all.push({
+                  title: item.title,
+                  location: city,
+                  url: item.link,
+                  pid: slugify(item.title + item.link),
+                  posted: item.pubDate
+                    ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return new Date().toISOString().slice(0, 10); } })()
+                    : new Date().toISOString().slice(0, 10),
+                });
+              }
             }
-          }
-        } catch { continue; }
+          } catch { continue; }
+        }
       }
     }
 
@@ -3910,59 +3993,285 @@ async function fetchPorchJobs() {
   }
 }
 
-// ─── Jobicy (Remote Jobs public API – replaces Indeed) ──────────────────────
+// ─── Indeed (Largest Job Board via RSS Search Feeds) ───────────────────────
 
-function normalizeJobicyJob(job) {
-  const title = String(job?.title || 'Untitled role').trim() || 'Untitled role';
-  const company = String(job?.companyName || 'Unknown company').trim() || 'Unknown company';
-  const location = String(job?.jobGeo || 'Worldwide').trim() || 'Worldwide';
-  const industry = Array.isArray(job?.jobIndustry) ? job.jobIndustry.join(' ') : String(job?.jobIndustry || '');
-  const level = String(job?.jobLevel || '');
-  const type = String(job?.jobType || '');
-  const isRemote = !job?.jobGeo || /remote|worldwide/i.test(location);
-  const sourceText = [title, company, location, industry, level, type].join(' ');
+function normalizeIndeedJob(item, queryLabel = '') {
+  const rawTitle = String(item?.title || '').trim();
+  const description = String(item?.description || '').replace(/<[^>]+>/g, ' ').trim();
+  const cleanTitle = rawTitle.replace(/\s+-\s+.*$/, '').trim();
+  const title = cleanTitle || rawTitle || 'Untitled role';
+  const sourceText = [rawTitle, title, description, queryLabel].join(' ');
+
+  let company = 'Indeed Listing';
+  const companyFromTitle = rawTitle.match(/-\s*([^\-|]+)$/);
+  if (companyFromTitle?.[1]) {
+    company = companyFromTitle[1].trim() || company;
+  }
+
+  const locationFromDesc = description.match(/\b([A-Za-z\s]+,\s*[A-Z]{2})\b/);
+  const location = locationFromDesc?.[1] ? locationFromDesc[1].trim() : 'Multiple Locations';
 
   return hydrateEndProductCategory({
-    id: `jobicy_${job?.id || slugify(`${company}_${title}`)}`,
+    id: `indeed_${slugify((item?.link || '') + '_' + title)}`,
     title,
     company,
     locations: [location],
-    remotePreferences: isRemote ? ['Remote'] : [],
-    jobTypes: [type, level].filter(Boolean),
-    datePosted: job?.publishedAt ? String(job.publishedAt).slice(0, 10) : null,
-    logo: job?.companyLogo || null,
-    url: job?.url || 'https://jobicy.com',
-    source: 'jobicy',
+    remotePreferences: /remote|work from home|anywhere|hybrid/i.test(sourceText) ? ['Remote'] : [],
+    jobTypes: queryLabel ? [queryLabel] : [],
+    datePosted: item?.pubDate
+      ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return null; } })()
+      : null,
+    logo: null,
+    url: item?.link || 'https://www.indeed.com',
+    source: 'indeed',
     jobField: inferJobFieldFromText(sourceText),
     companySize: classifyCompanySize(company),
+    description: description.slice(0, 700),
   });
 }
 
 async function fetchIndeedJobs() {
   try {
-    // Jobicy public REST API — no auth required. Replaces defunct Indeed integration.
-    const all = [];
-    const variants = [
-      new URLSearchParams({ count: 50 }),
-      new URLSearchParams({ count: 50, geo: 'usa' }),
+    const queryVariants = [
+      { q: 'software engineer', label: 'Engineering' },
+      { q: 'data scientist', label: 'Data' },
+      { q: 'machine learning engineer', label: 'AI/ML' },
+      { q: 'product manager', label: 'Product' },
+      { q: 'devops engineer', label: 'DevOps' },
+      { q: 'sales manager', label: 'Sales' },
+      { q: 'customer success manager', label: 'Customer Success' },
+      { q: 'operations manager', label: 'Operations' },
+      { q: 'finance analyst', label: 'Finance' },
+      { q: 'legal counsel', label: 'Legal' },
+      { q: 'sustainability analyst', label: 'Climate' },
+      { q: 'renewable energy engineer', label: 'Climate' },
+      { q: 'global health specialist', label: 'Global Health' },
+      { q: 'biotech scientist', label: 'Biotech' },
+      { q: 'supply chain manager', label: 'Supply Chain' },
+      { q: 'nurse practitioner', label: 'Medical' },
+      { q: 'teacher', label: 'Education' },
     ];
-    for (const params of variants) {
-      try {
-        const r = await fetch(`https://jobicy.com/api/v2/remote-jobs?${params}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
-          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
-        });
-        if (!r.ok) break;
-        const payload = await r.json();
-        const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
-        all.push(...jobs);
-      } catch { break; }
+    const locations = ['Remote', 'United States', 'California', 'New York, NY', 'Texas'];
+    const starts = Array.from({ length: Math.max(2, Math.min(8, INGEST_VOLUME_MULTIPLIER * 2)) }, (_, i) => i * 10);
+
+    const items = [];
+    for (const variant of queryVariants) {
+      for (const location of locations) {
+        for (const start of starts) {
+          try {
+            const params = new URLSearchParams({
+              q: variant.q,
+              l: location,
+              start: String(start),
+              sort: 'date',
+            });
+            const r = await fetch(`https://www.indeed.com/rss?${params.toString()}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+            });
+            if (!r.ok) continue;
+            const feedItems = parseRssItems(await r.text());
+            for (const item of feedItems) {
+              items.push({ ...item, __queryLabel: variant.label });
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
     }
-    const normalized = all.map(normalizeJobicyJob).filter((j) => j.id && j.title);
-    console.log(`[jobicy] ${normalized.length} jobs`);
+
+    const seen = new Set();
+    const normalized = items
+      .map((item) => normalizeIndeedJob(item, item.__queryLabel || ''))
+      .filter((job) => job.id && job.title && !seen.has(job.id) && seen.add(job.id));
+    console.log(`[indeed] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
-    console.log(`[jobicy] 0 jobs (error: ${err.message})`);
+    console.log(`[indeed] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+function extractJsonLdObjectsFromHtml(html) {
+  const blocks = [];
+  const re = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let match;
+  while ((match = re.exec(String(html || ''))) !== null) {
+    const raw = String(match[1] || '').trim();
+    if (!raw) continue;
+    try {
+      blocks.push(JSON.parse(raw));
+    } catch {
+      // Skip invalid JSON-LD blocks.
+    }
+  }
+
+  const flat = [];
+  const pushObj = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (Array.isArray(obj)) {
+      obj.forEach(pushObj);
+      return;
+    }
+    if (Array.isArray(obj['@graph'])) {
+      obj['@graph'].forEach(pushObj);
+      return;
+    }
+    flat.push(obj);
+  };
+  blocks.forEach(pushObj);
+  return flat;
+}
+
+function normalizeZipRecruiterJob(posting, sourceUrl) {
+  const title = String(posting?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(posting?.hiringOrganization?.name || posting?.name || 'Unknown company').trim() || 'Unknown company';
+  const location = String(posting?.jobLocation?.address?.addressLocality || posting?.jobLocation?.name || 'Multiple Locations').trim() || 'Multiple Locations';
+  const description = String(posting?.description || '').replace(/<[^>]+>/g, ' ').trim();
+  const sourceText = [title, company, location, description].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `ziprecruiter_${slugify(String(posting?.url || sourceUrl || '') + '_' + title)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: /remote|work from home|anywhere|hybrid/i.test(sourceText) ? ['Remote'] : [],
+    jobTypes: posting?.employmentType ? [String(posting.employmentType)] : [],
+    datePosted: posting?.datePosted ? String(posting.datePosted).slice(0, 10) : null,
+    logo: null,
+    url: String(posting?.url || sourceUrl || 'https://www.ziprecruiter.com/jobs-search'),
+    source: 'ziprecruiter',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+    description: description.slice(0, 700),
+  });
+}
+
+async function fetchZipRecruiterJobs() {
+  try {
+    const queries = [
+      'software engineer', 'data scientist', 'machine learning engineer', 'product manager',
+      'devops engineer', 'sales manager', 'customer success manager', 'operations manager',
+      'renewable energy engineer', 'nurse practitioner', 'teacher',
+    ];
+    const locations = ['Remote', 'United States'];
+    const pages = Array.from({ length: Math.max(1, Math.min(6, INGEST_VOLUME_MULTIPLIER + 1)) }, (_, i) => i + 1);
+    const items = [];
+
+    for (const query of queries) {
+      for (const location of locations) {
+        for (const page of pages) {
+          try {
+            const params = new URLSearchParams({
+              search: query,
+              location,
+              page: String(page),
+            });
+            const url = `https://www.ziprecruiter.com/jobs-search?${params.toString()}`;
+            const r = await fetch(url, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+            });
+            if (r.status === 403) {
+              console.log('[ziprecruiter] 0 jobs (blocked by anti-bot protection in current runtime)');
+              return [];
+            }
+            if (!r.ok) continue;
+            const html = await r.text();
+            const jsonLd = extractJsonLdObjectsFromHtml(html);
+            for (const obj of jsonLd) {
+              if (String(obj?.['@type'] || '').toLowerCase() === 'jobposting') {
+                items.push(normalizeZipRecruiterJob(obj, url));
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+
+    const seen = new Set();
+    const normalized = items.filter((job) => job.id && job.title && !seen.has(job.id) && seen.add(job.id));
+    console.log(`[ziprecruiter] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[ziprecruiter] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+function normalizeMonsterJob(posting, sourceUrl) {
+  const title = String(posting?.title || posting?.name || 'Untitled role').trim() || 'Untitled role';
+  const company = String(posting?.hiringOrganization?.name || 'Unknown company').trim() || 'Unknown company';
+  const location = String(posting?.jobLocation?.address?.addressLocality || posting?.jobLocation?.name || 'Multiple Locations').trim() || 'Multiple Locations';
+  const description = String(posting?.description || '').replace(/<[^>]+>/g, ' ').trim();
+  const sourceText = [title, company, location, description].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `monster_${slugify(String(posting?.url || sourceUrl || '') + '_' + title)}`,
+    title,
+    company,
+    locations: [location],
+    remotePreferences: /remote|work from home|anywhere|hybrid/i.test(sourceText) ? ['Remote'] : [],
+    jobTypes: posting?.employmentType ? [String(posting.employmentType)] : [],
+    datePosted: posting?.datePosted ? String(posting.datePosted).slice(0, 10) : null,
+    logo: null,
+    url: String(posting?.url || sourceUrl || 'https://www.monster.com/jobs/search'),
+    source: 'monster',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+    description: description.slice(0, 700),
+  });
+}
+
+async function fetchMonsterJobs() {
+  try {
+    const queries = [
+      'software engineer', 'data scientist', 'product manager', 'devops engineer',
+      'sales manager', 'operations manager', 'marketing manager', 'teacher',
+    ];
+    const locations = ['remote', 'united-states'];
+    const pages = Array.from({ length: Math.max(1, Math.min(5, INGEST_VOLUME_MULTIPLIER + 1)) }, (_, i) => i + 1);
+    const items = [];
+
+    for (const query of queries) {
+      for (const location of locations) {
+        for (const page of pages) {
+          try {
+            const q = encodeURIComponent(query.replace(/\s+/g, '-'));
+            const l = encodeURIComponent(location);
+            const url = `https://www.monster.com/jobs/search/?q=${q}&where=${l}&page=${page}`;
+            const r = await fetch(url, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+            });
+            if (r.status === 403) {
+              console.log('[monster] 0 jobs (blocked by anti-bot protection in current runtime)');
+              return [];
+            }
+            if (!r.ok) continue;
+            const html = await r.text();
+            const jsonLd = extractJsonLdObjectsFromHtml(html);
+            for (const obj of jsonLd) {
+              if (String(obj?.['@type'] || '').toLowerCase() === 'jobposting') {
+                items.push(normalizeMonsterJob(obj, url));
+              }
+            }
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+
+    const seen = new Set();
+    const normalized = items.filter((job) => job.id && job.title && !seen.has(job.id) && seen.add(job.id));
+    console.log(`[monster] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[monster] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
@@ -4113,8 +4422,8 @@ function normalizePythonOrgJob(item) {
 
 async function fetchDevToJobs() {
   try {
-    // Python.org jobs JSON Feed — replaces defunct Dev.to jobs board
-    const r = await fetch('https://www.python.org/jobs/feed/json/', {
+    // Python.org jobs RSS feed (JSON endpoint no longer available)
+    const r = await fetch('https://www.python.org/jobs/feed/rss/', {
       headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
       signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
     });
@@ -4122,9 +4431,31 @@ async function fetchDevToJobs() {
       console.log(`[pythondotorg] 0 jobs (HTTP ${r.status})`);
       return [];
     }
-    const payload = await r.json();
-    const items = Array.isArray(payload?.items) ? payload.items : [];
-    const normalized = items.map(normalizePythonOrgJob).filter((j) => j.id && j.title);
+    const items = parseRssItems(await r.text());
+    const normalized = items
+      .map((item) => {
+        const rawTitle = String(item?.title || '').trim();
+        const parts = rawTitle.split(/\s+at\s+/i);
+        const title = parts[0] || rawTitle || 'Untitled role';
+        const company = parts[1] || 'Unknown company';
+        return hydrateEndProductCategory({
+          id: `pythondotorg_${slugify((item?.link || '') + '_' + rawTitle)}`,
+          title,
+          company,
+          locations: ['Multiple Locations'],
+          remotePreferences: /remote|work from home|anywhere/i.test(rawTitle + ' ' + String(item?.description || '')) ? ['Remote'] : [],
+          jobTypes: [],
+          datePosted: item?.pubDate
+            ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return null; } })()
+            : null,
+          logo: null,
+          url: item?.link || 'https://www.python.org/jobs/',
+          source: 'pythondotorg',
+          jobField: inferJobFieldFromText(`${title} ${company} ${item?.description || ''}`),
+          companySize: classifyCompanySize(company),
+        });
+      })
+      .filter((j) => j.id && j.title);
     console.log(`[pythondotorg] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
@@ -4203,9 +4534,10 @@ function normalizeHackerNewsJob(item) {
 
 async function fetchHackerNewsJobs() {
   try {
-    // Step 1: Find the latest "Ask HN: Who is Hiring?" thread via Algolia
+    // Step 1: Find recent "Ask HN: Who is Hiring?" threads via Algolia
+    const hnThreadCount = Math.max(8, Math.min(20, INGEST_VOLUME_MULTIPLIER * 4));
     const searchR = await fetch(
-      'https://hn.algolia.com/api/v1/search?tags=ask_hn,story&query=Ask+HN%3A+Who+is+Hiring%3F&hitsPerPage=1',
+      `https://hn.algolia.com/api/v1/search?tags=ask_hn,story&query=Ask+HN%3A+Who+is+Hiring%3F&hitsPerPage=${hnThreadCount}`,
       { headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' }, signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) },
     );
     if (!searchR.ok) {
@@ -4213,30 +4545,422 @@ async function fetchHackerNewsJobs() {
       return [];
     }
     const searchPayload = await searchR.json();
-    const thread = searchPayload?.hits?.[0];
-    if (!thread?.objectID) {
+    const threads = Array.isArray(searchPayload?.hits) ? searchPayload.hits.filter((t) => t?.objectID) : [];
+    if (threads.length === 0) {
       console.log('[hackernews] 0 jobs (no hiring thread found)');
       return [];
     }
 
-    // Step 2: Fetch all top-level comments from that story via Algolia
-    const storyId = thread.objectID;
-    const commentsR = await fetch(
-      `https://hn.algolia.com/api/v1/search_by_date?tags=comment,story_${storyId}&hitsPerPage=1000`,
-      { headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' }, signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) },
-    );
-    if (!commentsR.ok) {
-      console.log('[hackernews] 0 jobs (Algolia comments unavailable)');
-      return [];
+    // Step 2: Fetch top-level comments from each recent monthly story
+    const combined = [];
+    for (const thread of threads) {
+      const storyId = String(thread.objectID);
+      try {
+        const commentsR = await fetch(
+          `https://hn.algolia.com/api/v1/search_by_date?tags=comment,story_${storyId}&hitsPerPage=1000`,
+          { headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' }, signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) },
+        );
+        if (!commentsR.ok) continue;
+        const commentsPayload = await commentsR.json();
+        const comments = Array.isArray(commentsPayload?.hits) ? commentsPayload.hits : [];
+        const topLevel = comments.filter((c) => String(c?.parent_id) === storyId && c?.comment_text);
+        combined.push(...topLevel);
+      } catch {
+        continue;
+      }
     }
-    const commentsPayload = await commentsR.json();
-    const comments = Array.isArray(commentsPayload?.hits) ? commentsPayload.hits : [];
-    const topLevel = comments.filter((c) => String(c?.parent_id) === String(storyId) && c?.comment_text);
-    const normalized = topLevel.map(normalizeHackerNewsJob).filter((j) => j.id && j.title);
+
+    const seen = new Set();
+    const normalized = combined
+      .map(normalizeHackerNewsJob)
+      .filter((j) => j.id && j.title && !seen.has(j.id) && seen.add(j.id));
     console.log(`[hackernews] ${normalized.length} jobs`);
     return normalized;
   } catch (err) {
     console.log(`[hackernews] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Jooble (Public Search Pages via RSS) ──────────────────────────────────
+
+function normalizeJoobleJob(item, queryLabel = '') {
+  const rawTitle = String(item?.title || '').trim();
+  const title = rawTitle.replace(/^\[[^\]]+\]\s*/g, '').trim() || 'Untitled role';
+  const description = String(item?.description || '').replace(/<[^>]+>/g, ' ').trim();
+  const sourceText = [title, description, queryLabel].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `jooble_${slugify((item?.link || '') + '_' + title)}`,
+    title,
+    company: 'Jooble Listing',
+    locations: ['Multiple Locations'],
+    remotePreferences: /remote|work from home|anywhere/i.test(sourceText) ? ['Remote'] : [],
+    jobTypes: queryLabel ? [queryLabel] : [],
+    datePosted: item?.pubDate
+      ? (() => { try { return new Date(item.pubDate).toISOString().slice(0, 10); } catch { return null; } })()
+      : null,
+    logo: null,
+    url: item?.link || 'https://jooble.org',
+    source: 'jooble',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'small',
+    description,
+  });
+}
+
+async function fetchJoobleJobs() {
+  try {
+    const queryVariants = [
+      { q: 'software engineer', label: 'Engineering' },
+      { q: 'data scientist', label: 'Data' },
+      { q: 'machine learning engineer', label: 'AI/ML' },
+      { q: 'product manager', label: 'Product' },
+      { q: 'ux designer', label: 'Design' },
+      { q: 'devops engineer', label: 'DevOps' },
+      { q: 'backend engineer', label: 'Engineering' },
+      { q: 'frontend engineer', label: 'Engineering' },
+      { q: 'full stack engineer', label: 'Engineering' },
+      { q: 'security engineer', label: 'Security' },
+      { q: 'site reliability engineer', label: 'DevOps' },
+      { q: 'cloud engineer', label: 'Cloud' },
+      { q: 'mobile developer', label: 'Mobile' },
+      { q: 'embedded engineer', label: 'Embedded' },
+      { q: 'research scientist ai', label: 'AI/ML' },
+      { q: 'data engineer', label: 'Data' },
+      { q: 'business analyst', label: 'Analytics' },
+      { q: 'project manager', label: 'Project Management' },
+      { q: 'sales manager', label: 'Sales' },
+      { q: 'account executive', label: 'Sales' },
+      { q: 'customer success', label: 'Customer Success' },
+      { q: 'customer support specialist', label: 'Support' },
+      { q: 'operations manager', label: 'Operations' },
+      { q: 'finance manager', label: 'Finance' },
+      { q: 'legal counsel', label: 'Legal' },
+      { q: 'recruiter talent', label: 'People' },
+      { q: 'marketing manager', label: 'Marketing' },
+      { q: 'policy analyst climate', label: 'Policy' },
+      { q: 'renewable energy engineer', label: 'Climate' },
+      { q: 'sustainability analyst', label: 'Climate' },
+      { q: 'solar engineer', label: 'Climate' },
+      { q: 'battery engineer', label: 'Climate' },
+      { q: 'global health analyst', label: 'Global Health' },
+      { q: 'biotech scientist', label: 'Biotech' },
+      { q: 'clinical data manager', label: 'Medical' },
+      { q: 'supply chain manager', label: 'Supply Chain' },
+      { q: 'procurement specialist', label: 'Supply Chain' },
+      { q: 'manufacturing engineer', label: 'Manufacturing' },
+      { q: 'teacher education technology', label: 'EdTech' },
+      { q: 'software engineer remote', label: 'Engineering' },
+      { q: 'data scientist remote', label: 'Data' },
+      { q: 'ml engineer remote', label: 'AI/ML' },
+      { q: 'product manager remote', label: 'Product' },
+      { q: 'cybersecurity analyst', label: 'Security' },
+      { q: 'qa engineer', label: 'Quality' },
+      { q: 'platform engineer', label: 'Infrastructure' },
+      { q: 'site reliability', label: 'DevOps' },
+      { q: 'solutions architect', label: 'Cloud' },
+      { q: 'data analyst', label: 'Analytics' },
+      { q: 'business operations', label: 'Operations' },
+      { q: 'technical writer', label: 'Writing' },
+      { q: 'customer support remote', label: 'Support' },
+      { q: 'recruiting coordinator', label: 'People' },
+      { q: 'people operations', label: 'People' },
+      { q: 'accounting manager', label: 'Finance' },
+      { q: 'financial analyst', label: 'Finance' },
+      { q: 'legal operations', label: 'Legal' },
+      { q: 'policy manager', label: 'Policy' },
+      { q: 'climate analyst', label: 'Climate' },
+      { q: 'energy analyst', label: 'Climate' },
+      { q: 'carbon accounting', label: 'Climate' },
+      { q: 'global health manager', label: 'Global Health' },
+      { q: 'public health specialist', label: 'Global Health' },
+      { q: 'biostatistician', label: 'Medical' },
+      { q: 'research associate biotech', label: 'Biotech' },
+      { q: 'sourcing manager', label: 'Supply Chain' },
+      { q: 'logistics analyst', label: 'Supply Chain' },
+      { q: 'industrial engineer', label: 'Manufacturing' },
+      { q: 'instructional designer', label: 'EdTech' },
+      { q: 'curriculum developer', label: 'EdTech' },
+      { q: 'nurse practitioner', label: 'Medical' },
+      { q: 'physician assistant', label: 'Medical' },
+      { q: 'teacher', label: 'Education' },
+      { q: 'account executive remote', label: 'Sales' },
+      { q: 'sales development representative', label: 'Sales' },
+      { q: 'growth marketing', label: 'Marketing' },
+      { q: 'content strategist', label: 'Marketing' },
+      { q: 'executive assistant', label: 'Operations' },
+      { q: 'chief of staff', label: 'Operations' },
+    ];
+
+    const joobleModifiers = [
+      'remote',
+      'usa',
+      'worldwide',
+      'entry level',
+      'senior',
+      'contract',
+      'part time',
+      'full time',
+      'hybrid',
+      'onsite',
+    ].slice(0, Math.min(10, INGEST_VOLUME_MULTIPLIER * 2));
+
+    const expandedVariants = [];
+    const baseForExpansion = queryVariants.slice(0, Math.min(queryVariants.length, 30 + (INGEST_VOLUME_MULTIPLIER * 10)));
+    for (const base of baseForExpansion) {
+      for (const modifier of joobleModifiers) {
+        expandedVariants.push({ q: `${base.q} ${modifier}`.trim(), label: base.label });
+      }
+    }
+
+    const seenQueries = new Set();
+    const allVariants = [...queryVariants, ...expandedVariants].filter((variant) => {
+      const key = `${variant.label}|${variant.q}`.toLowerCase();
+      if (seenQueries.has(key)) return false;
+      seenQueries.add(key);
+      return true;
+    });
+
+    const items = [];
+    for (const variant of allVariants) {
+      try {
+        const params = new URLSearchParams({
+          q: variant.q,
+          r: '1',
+        });
+        const r = await fetch(`https://jooble.org/rss?${params.toString()}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+          signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+        });
+        if (!r.ok) continue;
+        const feedItems = parseRssItems(await r.text());
+        for (const item of feedItems) {
+          items.push({ ...item, __queryLabel: variant.label });
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    const normalized = items
+      .map((item) => normalizeJoobleJob(item, item.__queryLabel || ''))
+      .filter((job) => job.id && job.title);
+    console.log(`[jooble] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[jooble] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── ReliefWeb (Global Humanitarian Jobs API) ─────────────────────────────
+
+function normalizeReliefWebJob(item) {
+  const fields = item?.fields || {};
+  const title = String(fields?.title || 'Untitled role').trim() || 'Untitled role';
+  const sourceOrg = Array.isArray(fields?.source) && fields.source.length > 0
+    ? String(fields.source[0]?.name || 'ReliefWeb Organization').trim()
+    : 'ReliefWeb Organization';
+  const countries = Array.isArray(fields?.country)
+    ? fields.country.map((country) => String(country?.name || '').trim()).filter(Boolean)
+    : [];
+  const careerCategories = Array.isArray(fields?.career_categories)
+    ? fields.career_categories.map((c) => String(c?.name || '').trim()).filter(Boolean)
+    : [];
+  const bodyText = String(fields?.body || '').replace(/<[^>]+>/g, ' ').slice(0, 700);
+  const sourceText = [title, sourceOrg, countries.join(' '), careerCategories.join(' '), bodyText].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `reliefweb_${item?.id || slugify(`${sourceOrg}_${title}`)}`,
+    title,
+    company: sourceOrg || 'ReliefWeb Organization',
+    locations: countries.length > 0 ? countries : ['Global'],
+    remotePreferences: /remote|home-?based|work from home|anywhere/i.test(sourceText) ? ['Remote'] : [],
+    jobTypes: careerCategories,
+    datePosted: fields?.date?.created ? String(fields.date.created).slice(0, 10) : null,
+    logo: null,
+    url: String(fields?.url || item?.href || 'https://reliefweb.int/jobs'),
+    source: 'reliefweb',
+    jobField: 'globalhealth',
+    companySize: classifyCompanySize(sourceOrg),
+    description: bodyText,
+  });
+}
+
+async function fetchReliefWebJobs() {
+  try {
+    const perPage = 250;
+    const pages = Math.max(6, Math.min(16, INGEST_VOLUME_MULTIPLIER * 4));
+    const data = [];
+    let accessDenied = false;
+
+    for (let page = 0; page < pages; page += 1) {
+      const params = new URLSearchParams({
+        appname: String(process.env.RELIEFWEB_APPNAME || '').trim() || 'job-finder.invalid',
+        profile: 'full',
+        limit: String(perPage),
+        offset: String(page * perPage),
+      });
+      const r = await fetch(`https://api.reliefweb.int/v2/jobs?${params.toString()}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+      if (r.status === 403) {
+        accessDenied = true;
+        break;
+      }
+      if (!r.ok) break;
+      const payload = await r.json();
+      const chunk = Array.isArray(payload?.data) ? payload.data : [];
+      if (chunk.length === 0) break;
+      data.push(...chunk);
+      if (chunk.length < perPage) break;
+    }
+
+    const normalized = data.map(normalizeReliefWebJob).filter((job) => job.id && job.title);
+    if (normalized.length === 0 && accessDenied) {
+      console.log('[reliefweb] 0 jobs (RELIEFWEB_APPNAME approval required)');
+      return [];
+    }
+    console.log(`[reliefweb] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[reliefweb] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Reddit Hiring Communities (Public JSON feeds) ────────────────────────
+
+function normalizeRedditHiringJob(post, subreddit) {
+  const title = String(post?.title || 'Untitled role').trim() || 'Untitled role';
+  const selfText = String(post?.selftext || '').replace(/\s+/g, ' ').trim();
+  const isHiring = /\[hiring\]|hiring|we\s+are\s+hiring|job\s+opening/i.test(title + ' ' + selfText);
+  const isRemote = /remote|work from home|anywhere/i.test(title + ' ' + selfText);
+  const sourceText = [title, selfText, subreddit].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `redditjobs_${post?.id || slugify(title)}`,
+    title,
+    company: `r/${subreddit}`,
+    locations: [isRemote ? 'Remote' : 'Multiple Locations'],
+    remotePreferences: isRemote ? ['Remote'] : [],
+    jobTypes: [isHiring ? 'Hiring' : 'Opportunity'],
+    datePosted: post?.created_utc ? new Date(post.created_utc * 1000).toISOString().slice(0, 10) : null,
+    logo: null,
+    url: post?.url || (post?.permalink ? `https://www.reddit.com${post.permalink}` : 'https://www.reddit.com'),
+    source: 'redditjobs',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'small',
+    description: selfText.slice(0, 700),
+  });
+}
+
+async function fetchRedditJobs() {
+  try {
+    const subreddits = [
+      'forhire', 'remotejobs', 'hiring', 'jobbit', 'remotework',
+      'jobopenings', 'jobs', 'techjobs', 'devjobs', 'cscareerquestions',
+    ];
+    const listingModes = ['new', 'hot', 'rising', 'top'];
+    const redditPageDepth = Math.max(1, Math.min(4, INGEST_VOLUME_MULTIPLIER));
+    const posts = [];
+    let blockedByReddit = false;
+
+    for (const subreddit of subreddits) {
+      for (const mode of listingModes) {
+        try {
+          let after = null;
+          for (let page = 0; page < redditPageDepth; page += 1) {
+            const suffix = mode === 'top' ? 't=month&' : '';
+            const afterParam = after ? `&after=${encodeURIComponent(after)}` : '';
+            const r = await fetch(`https://www.reddit.com/r/${subreddit}/${mode}.json?${suffix}limit=100${afterParam}`, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+              signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+            });
+            if (r.status === 403) {
+              blockedByReddit = true;
+              break;
+            }
+            if (!r.ok) break;
+            const payload = await r.json();
+            const children = Array.isArray(payload?.data?.children) ? payload.data.children : [];
+            for (const child of children) {
+              if (child?.data) posts.push({ ...child.data, __subreddit: subreddit });
+            }
+            after = payload?.data?.after || null;
+            if (!after || children.length === 0) break;
+          }
+        } catch {
+          continue;
+        }
+        if (blockedByReddit) break;
+      }
+      if (blockedByReddit) break;
+    }
+
+    const globalSearchQueries = [
+      '%5BHiring%5D',
+      'hiring+remote',
+      'job+opening+software',
+      'we+are+hiring',
+      'hiring+data+scientist',
+      'hiring+product+manager',
+      'hiring+devops',
+      'hiring+sales',
+      'hiring+customer+success',
+      'hiring+climate',
+    ];
+
+    for (const encodedQuery of globalSearchQueries) {
+      if (blockedByReddit) break;
+      try {
+        let after = null;
+        for (let page = 0; page < redditPageDepth; page += 1) {
+          const afterParam = after ? `&after=${encodeURIComponent(after)}` : '';
+          const r = await fetch(`https://www.reddit.com/search.json?q=${encodedQuery}&sort=new&t=month&limit=100${afterParam}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (job-finder/1.0)' },
+            signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+          });
+          if (r.status === 403) {
+            blockedByReddit = true;
+            break;
+          }
+          if (!r.ok) break;
+          const payload = await r.json();
+          const children = Array.isArray(payload?.data?.children) ? payload.data.children : [];
+          for (const child of children) {
+            if (child?.data) posts.push({ ...child.data, __subreddit: String(child.data.subreddit || 'jobs') });
+          }
+          after = payload?.data?.after || null;
+          if (!after || children.length === 0) break;
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    if (blockedByReddit && posts.length === 0) {
+      console.log('[redditjobs] 0 jobs (blocked by anti-bot protection in current runtime)');
+      return [];
+    }
+
+    const seenPostIds = new Set();
+    const normalized = posts
+      .filter((post) => {
+        const id = String(post?.id || '').trim();
+        if (!id || seenPostIds.has(id)) return false;
+        seenPostIds.add(id);
+        return true;
+      })
+      .filter((post) => /\[hiring\]|hiring|job|opening|vacancy|position/i.test(`${post?.title || ''} ${post?.selftext || ''}`))
+      .map((post) => normalizeRedditHiringJob(post, post.__subreddit || 'jobs'))
+      .filter((job) => job.id && job.title);
+    console.log(`[redditjobs] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[redditjobs] 0 jobs (error: ${err.message})`);
     return [];
   }
 }
@@ -4355,7 +5079,19 @@ async function fetchProductHuntJobs() {
 }
 
 // ─── Combined Ingestion ────────────────────────────────────────────────────
+async function fetchJobSourceBatch(sources) {
+  return Promise.all(sources.map(async ({ label, fetcher }) => {
+    try {
+      return await fetcher();
+    } catch (error) {
+      console.warn(`[ingest] ${label} failed (${error?.message || 'unknown error'})`);
+      return [];
+    }
+  }));
+}
+
 async function fetchAllJobs() {
+  const ingestStartedAt = Date.now();
   const [
     climatebaseJobs,
     greenhouseJobs,
@@ -4379,47 +5115,55 @@ async function fetchAllJobs() {
     flexjobsJobs,
     porchJobs,
     indeedJobs,
+    zipRecruiterJobs,
+    monsterJobs,
     weworkremotelyJobs,
     angellistJobs,
     devtoJobs,
     dribbbleJobs,
     hackerNewsJobs,
     joobleJobs,
+    reliefwebJobs,
+    redditJobs,
     idealistJobs,
     kaggleJobs,
     producthuntJobs,
-  ] = await Promise.all([
-    fetchClimatebaseJobs(),
-    fetchGreenhouseJobs(),
-    fetchLeverJobs(),
-    fetchAshbyJobs(),
-    fetchBreezyJobs(),
-    fetchBambooJobs(),
-    fetchBuiltInJobs(),
-    fetchTerraJobs(),
-    fetch80kHoursJobs(),
-    fetchRemoteOKJobs(),
-    fetchRemotiveJobs(),
-    fetchArbeitnowJobs(),
-    fetchTheMuseJobs(),
-    fetchUSAJobsJobs(),
-    fetchUpworkJobs(),
-    fetchDiceJobs(),
-    fetchTaskRabbitJobs(),
-    fetchCraigslistJobs(),
-    fetchAngiesListJobs(),
-    fetchFlexJobsJobs(),
-    fetchPorchJobs(),
-    fetchIndeedJobs(),
-    fetchWeWorkRemotelyJobs(),
-    fetchAngelListJobs(),
-    fetchDevToJobs(),
-    fetchDribbbleJobs(),
-    fetchHackerNewsJobs(),
-    fetchJoobleJobs(),
-    fetchIdealistJobs(),
-    fetchKaggleJobs(),
-    fetchProductHuntJobs(),
+  ] = await fetchJobSourceBatch([
+    { label: 'climatebase', fetcher: fetchClimatebaseJobs },
+    { label: 'greenhouse', fetcher: fetchGreenhouseJobs },
+    { label: 'lever', fetcher: fetchLeverJobs },
+    { label: 'ashby', fetcher: fetchAshbyJobs },
+    { label: 'breezy', fetcher: fetchBreezyJobs },
+    { label: 'bamboo', fetcher: fetchBambooJobs },
+    { label: 'builtin', fetcher: fetchBuiltInJobs },
+    { label: 'terra', fetcher: fetchTerraJobs },
+    { label: '80khours', fetcher: fetch80kHoursJobs },
+    { label: 'remoteok', fetcher: fetchRemoteOKJobs },
+    { label: 'remotive', fetcher: fetchRemotiveJobs },
+    { label: 'arbeitnow', fetcher: fetchArbeitnowJobs },
+    { label: 'themuse', fetcher: fetchTheMuseJobs },
+    { label: 'usajobs', fetcher: fetchUSAJobsJobs },
+    { label: 'upwork', fetcher: fetchUpworkJobs },
+    { label: 'dice', fetcher: fetchDiceJobs },
+    { label: 'taskrabbit', fetcher: fetchTaskRabbitJobs },
+    { label: 'craigslist', fetcher: fetchCraigslistJobs },
+    { label: 'angieslist', fetcher: fetchAngiesListJobs },
+    { label: 'flexjobs', fetcher: fetchFlexJobsJobs },
+    { label: 'porch', fetcher: fetchPorchJobs },
+    { label: 'indeed', fetcher: fetchIndeedJobs },
+    { label: 'ziprecruiter', fetcher: fetchZipRecruiterJobs },
+    { label: 'monster', fetcher: fetchMonsterJobs },
+    { label: 'weworkremotely', fetcher: fetchWeWorkRemotelyJobs },
+    { label: 'angellist', fetcher: fetchAngelListJobs },
+    { label: 'devto', fetcher: fetchDevToJobs },
+    { label: 'dribbble', fetcher: fetchDribbbleJobs },
+    { label: 'hackernews', fetcher: fetchHackerNewsJobs },
+    { label: 'jooble', fetcher: fetchJoobleJobs },
+    { label: 'reliefweb', fetcher: fetchReliefWebJobs },
+    { label: 'redditjobs', fetcher: fetchRedditJobs },
+    { label: 'idealist', fetcher: fetchIdealistJobs },
+    { label: 'kaggle', fetcher: fetchKaggleJobs },
+    { label: 'producthunt', fetcher: fetchProductHuntJobs },
   ]);
 
   // Deduplicate by source-specific identity first so cross-platform duplicates are retained.
@@ -4449,12 +5193,16 @@ async function fetchAllJobs() {
     ...flexjobsJobs,
     ...porchJobs,
     ...indeedJobs,
+    ...zipRecruiterJobs,
+    ...monsterJobs,
     ...weworkremotelyJobs,
     ...angellistJobs,
     ...devtoJobs,
     ...dribbbleJobs,
     ...hackerNewsJobs,
     ...joobleJobs,
+    ...reliefwebJobs,
+    ...redditJobs,
     ...idealistJobs,
     ...kaggleJobs,
     ...producthuntJobs,
@@ -4467,6 +5215,71 @@ async function fetchAllJobs() {
     if (seen.has(key)) continue;
     seen.add(key);
     all.push(job);
+  }
+
+  const sourceCounts = {
+    climatebase: climatebaseJobs.length,
+    greenhouse: greenhouseJobs.length,
+    lever: leverJobs.length,
+    ashby: ashbyJobs.length,
+    breezy: breezyJobs.length,
+    bamboo: bambooJobs.length,
+    builtin: builtInJobs.length,
+    terra: terraJobs.length,
+    '80khours': eightykJobs.length,
+    remoteok: remoteokJobs.length,
+    remotive: remotiveJobs.length,
+    arbeitnow: arbeitnowJobs.length,
+    themuse: themuseJobs.length,
+    usajobs: usajobsJobs.length,
+    upwork: upworkJobs.length,
+    dice: diceJobs.length,
+    taskrabbit: taskrabbitJobs.length,
+    craigslist: craigslistJobs.length,
+    angieslist: angieslistJobs.length,
+    flexjobs: flexjobsJobs.length,
+    porch: porchJobs.length,
+    indeed: indeedJobs.length,
+    ziprecruiter: zipRecruiterJobs.length,
+    monster: monsterJobs.length,
+    weworkremotely: weworkremotelyJobs.length,
+    angellist: angellistJobs.length,
+    devto: devtoJobs.length,
+    dribbble: dribbbleJobs.length,
+    hackernews: hackerNewsJobs.length,
+    jooble: joobleJobs.length,
+    reliefweb: reliefwebJobs.length,
+    redditjobs: redditJobs.length,
+    idealist: idealistJobs.length,
+    kaggle: kaggleJobs.length,
+    producthunt: producthuntJobs.length,
+  };
+  const entries = Object.entries(sourceCounts);
+  const zeroSources = entries.filter(([, count]) => Number(count || 0) === 0).map(([label]) => label);
+  const topSources = entries
+    .slice()
+    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
+    .slice(0, 8)
+    .map(([label, count]) => `${label}:${count}`);
+  const totalRaw = entries.reduce((sum, [, count]) => sum + Number(count || 0), 0);
+  const durationMs = Date.now() - ingestStartedAt;
+  const criticalSources = ['climatebase', 'greenhouse', 'lever', 'hackernews', 'indeed', 'redditjobs', 'jooble'];
+  const criticalZero = criticalSources.filter((label) => Number(sourceCounts[label] || 0) === 0);
+  const anomalies = [];
+  if (durationMs >= INGEST_HEALTH_WARN_SLOW_MS) anomalies.push('slow-ingest');
+  if (criticalZero.length > 0) anomalies.push('critical-source-zero');
+
+  if (INGEST_HEALTH_VERBOSE || anomalies.length > 0) {
+    console.log(`[ingest-health] ${JSON.stringify({
+      durationMs,
+      totalUnique: all.length,
+      totalRaw,
+      sourceCount: entries.length,
+      topSources,
+      zeroSources,
+      criticalZero,
+      anomalies,
+    })}`);
   }
 
   console.log(
@@ -4493,12 +5306,16 @@ async function fetchAllJobs() {
     ` flexjobs: ${flexjobsJobs.length},` +
     ` porch: ${porchJobs.length},` +
     ` indeed: ${indeedJobs.length},` +
+    ` ziprecruiter: ${zipRecruiterJobs.length},` +
+    ` monster: ${monsterJobs.length},` +
     ` weworkremotely: ${weworkremotelyJobs.length},` +
     ` angellist: ${angellistJobs.length},` +
     ` devto: ${devtoJobs.length},` +
     ` dribbble: ${dribbbleJobs.length},` +
     ` hackernews: ${hackerNewsJobs.length},` +
     ` jooble: ${joobleJobs.length},` +
+    ` reliefweb: ${reliefwebJobs.length},` +
+    ` redditjobs: ${redditJobs.length},` +
     ` idealist: ${idealistJobs.length},` +
     ` kaggle: ${kaggleJobs.length},` +
     ` producthunt: ${producthuntJobs.length})`,
@@ -4560,7 +5377,7 @@ async function fetchAlgoliaPage({
 
 async function fetchClimatebaseJobs() {
   const nowEpoch = Math.floor(Date.now() / 1000);
-  const minWindowSecs = ALGOLIA_MIN_WINDOW_DAYS * 86_400;
+  const minWindowSecs = Math.max(1, Math.floor(ALGOLIA_MIN_WINDOW_DAYS * 86_400));
 
   // Step 1: discover all category facet values
   const facetProbe = await fetchAlgoliaPage({
@@ -4613,7 +5430,7 @@ async function fetchClimatebaseJobs() {
 
     // Saturated at page cap — split time window and recurse to recover more hits
     if (
-      false &&
+      nbPages * ALGOLIA_HITS_PER_PAGE <= hits.length &&
       depth < ALGOLIA_MAX_SPLIT_DEPTH &&
       windowSecs > minWindowSecs
     ) {
@@ -4851,8 +5668,151 @@ const NEGATIVE_ROLE_TERMS = [
   'civil engineer', 'field engineer',
 ];
 
-// Removed: RESUME2_*, RESUME3_* constants (unused after removing builtin resumes)
+// Resume2: Ben Gibbons - Principal C++ Audio Engineer (VR/AI/Spatial)
+const RESUME2_PROFILE_TEXT = [
+  'Principal C++ Audio Engineer with 10+ years building real-time audio systems.',
+  'Expertise in spatial audio, audio plugins (VST/AU), DSP algorithms.',
+  'Strong background in VR/spatial computing, real-time optimization.',
+  'AI/LLM interest: audio AI, voice models, speech synthesis.',
+  'Skills: C++, audio DSP, real-time systems, VR, spatial computing.',
+].join(' ');
 
+const RESUME2_TERM_WEIGHTS = {
+  // Audio & DSP
+  audio: 4.0, dsp: 4.0, 'digital signal processing': 4.0, 'audio plugin': 4.5,
+  'audio engineering': 4.2, 'audio developer': 4.2, vst: 3.8, au: 3.8,
+  'plugin development': 4.0, 'real-time audio': 4.3, 'spatial audio': 4.5,
+  '3d audio': 4.2, 'immersive audio': 4.3, 'ambisonics': 3.8, 'hrtf': 3.8,
+  'speech synthesis': 3.5, 'voice synthesis': 3.5, 'audio processing': 4.0,
+  
+  // VR & Spatial Computing
+  vr: 4.5, 'virtual reality': 4.5, 'spatial computing': 4.5,
+  'augmented reality': 3.5, ar: 3.5, 'xr': 4.2, 'extended reality': 4.2,
+  'immersive': 3.8, '3d': 3.5, spatial: 3.8, 'spatial interaction': 3.8,
+  'motion tracking': 3.5, haptic: 3.5, headset: 3.0,
+  
+  // C++ & Systems Programming
+  'c++': 4.5, cpp: 4.2, 'c++11': 4.0, 'c++17': 4.0, 'c++20': 4.0,
+  'systems programming': 3.8, 'low-level': 3.8, 'memory management': 3.5,
+  'real-time': 4.0, 'real-time systems': 4.2, optimization: 3.5,
+  performance: 3.2,
+  
+  // AI/LLM (Secondary for resume2)
+  ai: 3.8, llm: 4.0, 'large language model': 4.0, 'machine learning': 3.5,
+  ml: 3.5, rag: 3.2, 'neural network': 3.0, agent: 3.2,
+  
+  // Relevant Tech
+  python: 2.5, typescript: 2.5, javascript: 2.5, rust: 3.5,
+  python: 2.5, webgl: 2.8, 'three.js': 2.8, unity: 3.2,
+  unreal: 3.2, 'unreal engine': 3.2,
+  
+  // Skills & Seniority
+  principal: 3.8, staff: 3.2, senior: 2.5, lead: 2.5, architect: 2.8,
+  'audio engineer': 4.2, 'vr engineer': 4.0, 'spatial engineer': 4.0,
+  
+  // Accessibility
+  accessibility: 3.5, 'accessible': 3.2, inclusive: 2.8,
+  
+  // General
+  'software engineer': 1.5, developer: 1.5, engineer: 1.5,
+};
+
+const RESUME2_MATCH_FACETS = {
+  vr: ['vr', 'virtual reality', 'spatial computing', 'xr', 'ar', 'augmented reality', 'immersive'],
+  audio: ['audio', 'dsp', 'audio plugin', 'vst', 'au', 'spatial audio', 'immersive audio'],
+  ai: ['ai', 'llm', 'machine learning', 'neural network', 'speech', 'voice'],
+  tech: ['c++', 'cpp', 'rust', 'real-time', 'optimization', 'graphics', 'unity', 'unreal'],
+};
+
+const RESUME2_ANCHORS = [
+  'principal audio engineer',
+  'spatial audio vr',
+  'audio dsp plugin development',
+  'real-time spatial computing',
+  'vr spatial audio',
+  'audio llm speech synthesis',
+  'c++ real-time systems',
+  'audio engineering spatial',
+];
+
+const RESUME2_SIGNAL_PHRASES = [
+  ['spatial audio', 7],
+  ['audio dsp', 7],
+  ['vr spatial', 7],
+  ['audio plugin development', 8],
+  ['real-time audio', 7],
+  ['dsp algorithms', 6],
+  ['immersive audio', 6],
+  ['speech synthesis', 5],
+  ['audio engineering', 6],
+  ['vr platform', 6],
+  ['spatial computing', 6],
+  ['audio optimization', 5],
+  ['plugin development', 5],
+  ['real-time systems', 5],
+  ['c++ optimization', 5],
+];
+
+const RESUME2_SKILL_CANONICAL = {
+  cplusplus: ['c++', 'cpp', 'c plus plus'],
+  audio: ['audio', 'audio dsp', 'audio engineering'],
+  dsp: ['dsp', 'digital signal processing'],
+  plugin: ['plugin', 'plugin development', 'vst', 'au'],
+  vr: ['vr', 'virtual reality', 'spatial computing'],
+  spatial: ['spatial', 'spatial audio', '3d audio', 'ambisonics'],
+  llm: ['llm', 'large language model', 'speech synthesis'],
+  ml: ['machine learning', 'ml', 'neural network'],
+  realtime: ['real-time', 'realtime', 'low-latency'],
+  graphics: ['graphics', 'rendering', 'webgl', 'unity', 'unreal'],
+  optimization: ['optimization', 'performance', 'memory management'],
+  accessibility: ['accessibility', 'accessible', 'inclusive'],
+  ai: ['ai', 'artificial intelligence'],
+};
+
+const RESUME2_RESUME_SKILLS = new Set([
+  'cplusplus', 'audio', 'dsp', 'plugin', 'vr', 'spatial', 'llm', 'ml',
+  'realtime', 'graphics', 'optimization', 'accessibility', 'ai',
+]);
+
+// Resume Profiles Registry
+const RESUME_PROFILES = {
+  resume1: {
+    profileText: RESUME_PROFILE_TEXT,
+    termWeights: RESUME_TERM_WEIGHTS,
+    matchFacets: MATCH_FACETS,
+    anchors: RESUME_ANCHORS,
+    signalPhrases: ULTRA_SIGNAL_PHRASES,
+    skillCanonical: ULTRA_SKILL_CANONICAL,
+    resumeSkills: ULTRA_RESUME_SKILLS,
+    domainBoostFn: (text) => {
+      // Resume1: AI/ML/Climate focus
+      const patterns = [
+        /\b(climate|cleantech|clean energy|decarbonization|carbon)\b/gi,
+        /\b(ai|machine learning|llm|rag|generative ai|agents)\b/gi,
+      ];
+      return patterns.some(p => p.test(text)) ? 1.15 : 1.0;
+    },
+    missionRe: /\b(impact|climate|decarbonization|sustainability|ai|mission-driven)\b/i,
+  },
+  resume2: {
+    profileText: RESUME2_PROFILE_TEXT,
+    termWeights: RESUME2_TERM_WEIGHTS,
+    matchFacets: RESUME2_MATCH_FACETS,
+    anchors: RESUME2_ANCHORS,
+    signalPhrases: RESUME2_SIGNAL_PHRASES,
+    skillCanonical: RESUME2_SKILL_CANONICAL,
+    resumeSkills: RESUME2_RESUME_SKILLS,
+    domainBoostFn: (text) => {
+      // Resume2: Audio/VR/Spatial focus
+      const patterns = [
+        /\b(audio|dsp|spatial|immersive|vr|virtual reality|xr)\b/gi,
+        /\b(c\+\+|plugin|real-time|optimization)\b/gi,
+      ];
+      return patterns.some(p => p.test(text)) ? 1.15 : 1.0;
+    },
+    missionRe: /\b(audio|vr|spatial|immersive|plugin|real-time)\b/i,
+  },
+};
 
 const LOCAL_MODEL_DEFAULT = process.env.LOCAL_MATCH_MODEL === '1';
 const DEFAULT_RANKING_MODE = (() => {
@@ -5825,10 +6785,11 @@ async function rerankWithLocalModel(jobs, options = {}) {
   const topK = Number(options.topK || LOCAL_MODEL_TOP_K);
   const blend = Number(options.blend || LOCAL_MODEL_BLEND);
   const query = String(options.query || '').trim();
-  const profile = options.resumeProfile;
+  const resumeId = String(options.resumeId || 'resume1').trim();
+  const profile = RESUME_PROFILES[resumeId];
   if (!profile) return { jobs, localModelApplied: false };
   
-  const profileText = profile?.profileText || '';
+  const profileText = profile.profileText || '';
   const top = jobs.slice(0, topK);
   if (!top.length) return { jobs, localModelApplied: false };
 
@@ -5836,7 +6797,7 @@ async function rerankWithLocalModel(jobs, options = {}) {
     const resumePrompt = query
       ? `${profileText}\nTarget search intent: ${query}`
       : profileText;
-    const resumeEmbedding = await (query ? fetchOllamaEmbedding(resumePrompt) : getResumeEmbeddingForProfile(resumeKey, profile));
+    const resumeEmbedding = await (query ? fetchOllamaEmbedding(resumePrompt) : getResumeEmbedding(resumeId));
     const enriched = await Promise.all(top.map(async (job) => {
       const text = buildJobMatchingText(job);
       const emb = await fetchOllamaEmbedding(text);
@@ -6630,11 +7591,20 @@ const yieldToEventLoop = () => new Promise((resolve) => setImmediate(resolve));
 
 async function handleJobsApi(req, res, url) {
   try {
+    const searchStartedAt = Date.now();
+    const searchTimings = {};
+    const markSearchTiming = (stage) => {
+      searchTimings[stage] = Date.now() - searchStartedAt;
+    };
     const authUser = getAuthUserFromRequest(req);
     const requestId = String(url.searchParams.get('requestId') || '').trim();
     startRequestProgress(requestId);
     const q = (url.searchParams.get('q') || '').trim();
     const sortByParam = (url.searchParams.get('sortBy') || 'total').trim().toLowerCase();
+    const resumeIdParam = (url.searchParams.get('resumeId') || '').trim().toLowerCase();
+    const builtInResumeIdParam = (url.searchParams.get('builtInResumeId') || '').trim().toLowerCase();
+    const validResumeIds = new Set(Object.keys(RESUME_PROFILES));
+    const resumeId = validResumeIds.has(builtInResumeIdParam) ? builtInResumeIdParam : (validResumeIds.has(resumeIdParam) ? resumeIdParam : '');
     const rankingModeParam = (url.searchParams.get('rankingMode') || '').trim().toLowerCase();
     const impactModeParam = (url.searchParams.get('impactMode') || '').trim().toLowerCase();
     const localModelParam = (url.searchParams.get('localModel') || '').trim().toLowerCase();
@@ -6649,18 +7619,26 @@ async function handleJobsApi(req, res, url) {
       ? { lat: locationLatParam, lng: locationLngParam }
       : null;
     const resumeSelection = parseResumeSelectionFromParams(url.searchParams);
-    const requiresResume = Boolean(resumeSelection?.resumeId) || (Array.isArray(resumeSelection?.resumeIds) && resumeSelection.resumeIds.length > 0);
+    const validResumeIds2 = new Set(Object.keys(RESUME_PROFILES));
+    const hasBuiltInResume = builtInResumeIdParam && validResumeIds2.has(builtInResumeIdParam);
+    const requiresResume = hasBuiltInResume || Boolean(resumeSelection?.resumeId) || (Array.isArray(resumeSelection?.resumeIds) && resumeSelection.resumeIds.length > 0);
     if (!requiresResume) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'A selected resume is required' }));
       return;
     }
-    if (requiresResume && !authUser) {
+    if (requiresResume && !hasBuiltInResume && !authUser) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Authentication required' }));
       return;
     }
-    const { resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection);
+    let resumeKey, resumeProfile;
+    if (hasBuiltInResume) {
+      resumeKey = resumeId;
+      resumeProfile = RESUME_PROFILES[resumeId];
+    } else {
+      ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
+    }
     const limitParam = Number(url.searchParams.get('limit'));
     const offsetParam = Number(url.searchParams.get('offset'));
     const limit = Number.isFinite(limitParam)
@@ -6693,6 +7671,7 @@ async function handleJobsApi(req, res, url) {
       ? bookmarkFilterParam
       : 'all';
     const usOnly = !['0', 'false', 'no', 'off'].includes(usOnlyParam);
+    markSearchTiming('paramsParsed');
 
     const { jobs, stale, fromCache } = await getJobsWithCache();
     const datasetKey = resetDerivedCachesIfDatasetChanged(jobs);
@@ -6700,6 +7679,7 @@ async function handleJobsApi(req, res, url) {
     const roleTotal = companyCategorizedJobs.length;
     const matchedJobs = filterJobs(companyCategorizedJobs, q);
     const usFilteredJobs = usOnly ? matchedJobs.filter((job) => isUsJob(job)) : matchedJobs;
+    markSearchTiming('datasetLoadedAndFiltered');
     updateRequestProgress(requestId, {
       stepKey: 'filtering',
       title: 'Filtering jobs',
@@ -6756,6 +7736,7 @@ async function handleJobsApi(req, res, url) {
     cleanupExpiredJobSearchCache();
     const cachedSearch = jobSearchCache.get(searchCacheKey);
     if (cachedSearch && (Date.now() - cachedSearch.createdAt) <= JOB_SEARCH_CACHE_TTL_MS) {
+      markSearchTiming('searchCacheHit');
       // Keep insertion order LRU-ish by reinserting on hit.
       jobSearchCache.delete(searchCacheKey);
       jobSearchCache.set(searchCacheKey, cachedSearch);
@@ -6778,6 +7759,7 @@ async function handleJobsApi(req, res, url) {
         : null;
 
       if (refreshedCachedPage) {
+        markSearchTiming('exactPageCacheHit');
         updateRequestProgress(requestId, {
           stepKey: 'cache-hit',
           title: 'Returning exact cached page',
@@ -6835,6 +7817,26 @@ async function handleJobsApi(req, res, url) {
             jobs: refreshedCachedPage.jobs,
           }),
         );
+        logJobSearchHealth('success', {
+          durationMs: Date.now() - searchStartedAt,
+          requestId,
+          query: q,
+          cachePath: 'exact-page-cache-hit',
+          sortBy,
+          rankingMode,
+          impactMode,
+          usOnly,
+          offset,
+          limit,
+          totalReturned: Number(refreshedCachedPage.count || 0),
+          filteredAvailable: Number(cachedSearch.filteredTotal || 0),
+          totalAvailable: Number(jobs.length || 0),
+          searchCacheHit: true,
+          exactRequestCacheHit: true,
+          stale,
+          sourceCounts: cachedSearch.sourceCounts,
+          timingsMs: searchTimings,
+        });
         finishRequestProgress(requestId);
         return;
       }
@@ -6842,7 +7844,8 @@ async function handleJobsApi(req, res, url) {
       const jobLookupById = getJobLookupByIdCached(companyCategorizedJobs);
       const pageJobIds = cachedSearch.rankedJobIds.slice(offset, offset + limit);
       const scoredJobs = [];
-      const cachedGlobalMaxRaw = Math.max(1, Number(cachedSearch.globalMaxRaw) || 1);
+      const curveMaxRaw = Math.max(1, Number(cachedSearch.curveMaxRaw || RESUME_SCORE_FALLBACK_MAX_RAW));
+
       updateRequestProgress(requestId, {
         stepKey: 'cache-page-build',
         title: 'Building page from cached ranking',
@@ -6862,11 +7865,11 @@ async function handleJobsApi(req, res, url) {
         const jobId = pageJobIds[idx];
         const job = jobLookupById.get(jobId);
         if (!job) continue;
-        const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeKey);
+        const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeId);
         const bayScoreData = scoreBayAreaProximity(job, targetLocation, targetLocationCoordinates, targetLocationLabel);
         const impactScoreData = getImpactScoreCached(job, datasetKey, impactMode);
         const freshnessData = scoreFreshness(job);
-        const resumeScore = Math.round(((resumeScoreData.rawScore || 0) / cachedGlobalMaxRaw) * 100);
+        const resumeScore = Math.min(100, Math.max(0, Math.round(((resumeScoreData.rawScore || 0) / curveMaxRaw) * 100)));
         const auditScore = getAuditScoreCached(job.company, datasetKey);
         const scoreValues = {
           resumeScore,
@@ -6909,6 +7912,7 @@ async function handleJobsApi(req, res, url) {
           await yieldToEventLoop();
         }
       }
+      markSearchTiming('cacheSliceScored');
 
       const pageJobs = scoredJobs.map(serializeJobPageItem);
       if (!(cachedSearch.pageCache instanceof Map)) {
@@ -6962,9 +7966,31 @@ async function handleJobsApi(req, res, url) {
           jobs: pageJobs,
         }),
       );
+      logJobSearchHealth('success', {
+        durationMs: Date.now() - searchStartedAt,
+        requestId,
+        query: q,
+        cachePath: 'search-cache-hit',
+        sortBy,
+        rankingMode,
+        impactMode,
+        usOnly,
+        offset,
+        limit,
+        totalReturned: scoredJobs.length,
+        filteredAvailable: Number(cachedSearch.filteredTotal || 0),
+        totalAvailable: Number(jobs.length || 0),
+        searchCacheHit: true,
+        exactRequestCacheHit: false,
+        stale,
+        sourceCounts: cachedSearch.sourceCounts,
+        timingsMs: searchTimings,
+      });
       finishRequestProgress(requestId);
       return;
     }
+
+    markSearchTiming('searchCacheMiss');
 
     const sourceCounts = {};
     const jobTypeCounts = {};
@@ -6972,7 +7998,7 @@ async function handleJobsApi(req, res, url) {
     const companySizeCounts = {};
     const endProductCounts = {};
     const resumeScoresByJobId = new Map();
-    let globalMaxRaw = 0;
+    let curveMaxRaw = 1;
     updateRequestProgress(requestId, {
       stepKey: 'resume-scan',
       title: 'Scanning jobs against resume profile',
@@ -6987,7 +8013,28 @@ async function handleJobsApi(req, res, url) {
       ],
     });
 
-    // Build facet counts and the stable resume scaling value in a single pass.
+    // Build resume score curve baseline from keyword-matched jobs.
+    for (let idx = 0; idx < usFilteredJobs.length; idx += 1) {
+      const job = usFilteredJobs[idx];
+      const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeKey);
+      resumeScoresByJobId.set(job.id, resumeScoreData);
+      const raw = Number(resumeScoreData?.rawScore || 0);
+      if (raw > curveMaxRaw) curveMaxRaw = raw;
+
+      if (idx > 0 && idx % EVENT_LOOP_YIELD_INTERVAL === 0) {
+        const processed = idx + 1;
+        const pct = Math.round((processed / Math.max(1, usFilteredJobs.length)) * 24);
+        updateRequestProgress(requestId, {
+          processed,
+          total: Math.max(1, usFilteredJobs.length),
+          percent: Math.min(56, 22 + pct),
+        });
+        await yieldToEventLoop();
+      }
+    }
+    markSearchTiming('resumeScanDone');
+
+    // Build facet counts for the keyword-matched population.
     for (let idx = 0; idx < usFilteredJobs.length; idx += 1) {
       const job = usFilteredJobs[idx];
       const src = job.source || 'climatebase';
@@ -7012,23 +8059,7 @@ async function handleJobsApi(req, res, url) {
         endProductCounts[endProductCategory] = (endProductCounts[endProductCategory] || 0) + 1;
       }
 
-      const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeKey);
-      resumeScoresByJobId.set(job.id, resumeScoreData);
-      const resumeRaw = resumeScoreData.rawScore || 0;
-      if (resumeRaw > globalMaxRaw) globalMaxRaw = resumeRaw;
-
-      if (idx > 0 && idx % EVENT_LOOP_YIELD_INTERVAL === 0) {
-        const processed = idx + 1;
-        const pct = Math.round((processed / Math.max(1, usFilteredJobs.length)) * 24);
-        updateRequestProgress(requestId, {
-          processed,
-          total: Math.max(1, usFilteredJobs.length),
-          percent: Math.min(56, 22 + pct),
-        });
-        await yieldToEventLoop();
-      }
     }
-    if (globalMaxRaw === 0) globalMaxRaw = 1;
 
     // Apply source filter after computing counts
     const sourceFilteredJobs = sourcesFilter
@@ -7059,6 +8090,7 @@ async function handleJobsApi(req, res, url) {
     }
 
     const filteredTotal = visibilityFilteredJobs.length;
+    markSearchTiming('filtersApplied');
     updateRequestProgress(requestId, {
       stepKey: 'page-scoring',
       title: 'Scoring filtered jobs',
@@ -7097,11 +8129,12 @@ async function handleJobsApi(req, res, url) {
         await yieldToEventLoop();
       }
     }
+    markSearchTiming('baseScoresComputed');
 
     const scoredAll = [];
     for (let idx = 0; idx < withRaw.length; idx += 1) {
       const job = withRaw[idx];
-      const resumeScore = Math.round((job.rawScore / globalMaxRaw) * 100);
+      const resumeScore = Math.min(100, Math.max(0, Math.round((job.rawScore / Math.max(1, curveMaxRaw)) * 100)));
       const auditScore = getAuditScoreCached(job.company, datasetKey);
       const scoreValues = {
         resumeScore,
@@ -7140,6 +8173,7 @@ async function handleJobsApi(req, res, url) {
         await yieldToEventLoop();
       }
     }
+    markSearchTiming('compositeScoresComputed');
 
     const sorters = {
       total: (a, b) => b.score - a.score,
@@ -7174,12 +8208,12 @@ async function handleJobsApi(req, res, url) {
         topK: rankingMode === 'ultra' ? ULTRA_LOCAL_MODEL_TOP_K : LOCAL_MODEL_TOP_K,
         blend: rankingMode === 'ultra' ? ULTRA_LOCAL_MODEL_BLEND : LOCAL_MODEL_BLEND,
         query: q,
-        resumeKey,
-        resumeProfile,
+        resumeId,
         resumeProfile,
       });
       rankedAll = reranked.jobs;
       localModelApplied = reranked.localModelApplied;
+      markSearchTiming('rerankDone');
     }
 
     updateRequestProgress(requestId, {
@@ -7200,9 +8234,9 @@ async function handleJobsApi(req, res, url) {
 
     jobSearchCache.set(searchCacheKey, {
       createdAt: Date.now(),
+      curveMaxRaw,
       rankedJobIds: rankedAll.map((job) => job.id).filter(Boolean),
       filteredTotal,
-      globalMaxRaw,
       localModelApplied,
       sourceCounts: { ...sourceCounts },
       jobTypeCounts: { ...jobTypeCounts },
@@ -7215,6 +8249,7 @@ async function handleJobsApi(req, res, url) {
 
     const scoredJobs = rankedAll.slice(offset, offset + limit);
     const pageJobs = scoredJobs.map(serializeJobPageItem);
+    markSearchTiming('responseReady');
 
     const cachedSearchAfterSet = jobSearchCache.get(searchCacheKey);
     if (cachedSearchAfterSet && cachedSearchAfterSet.pageCache instanceof Map) {
@@ -7268,6 +8303,26 @@ async function handleJobsApi(req, res, url) {
         jobs: pageJobs,
       }),
     );
+    logJobSearchHealth('success', {
+      durationMs: Date.now() - searchStartedAt,
+      requestId,
+      query: q,
+      cachePath: 'search-cache-miss',
+      sortBy,
+      rankingMode,
+      impactMode,
+      usOnly,
+      offset,
+      limit,
+      totalReturned: scoredJobs.length,
+      filteredAvailable: filteredTotal,
+      totalAvailable: Number(jobs.length || 0),
+      searchCacheHit: false,
+      exactRequestCacheHit: false,
+      stale,
+      sourceCounts,
+      timingsMs: searchTimings,
+    });
     finishRequestProgress(requestId);
   } catch (error) {
     const requestId = String(url.searchParams.get('requestId') || '').trim();
@@ -7286,6 +8341,27 @@ async function handleJobsApi(req, res, url) {
         details: message,
       }),
     );
+    logJobSearchHealth('error', {
+      durationMs: 0,
+      requestId,
+      query: (url.searchParams.get('q') || '').trim(),
+      cachePath: 'error',
+      sortBy: (url.searchParams.get('sortBy') || 'total').trim().toLowerCase(),
+      rankingMode: (url.searchParams.get('rankingMode') || '').trim().toLowerCase(),
+      impactMode: (url.searchParams.get('impactMode') || '').trim().toLowerCase(),
+      usOnly: !['0', 'false', 'no', 'off'].includes((url.searchParams.get('usOnly') || '1').trim().toLowerCase()),
+      offset: Number(url.searchParams.get('offset') || 0),
+      limit: Number(url.searchParams.get('limit') || 0),
+      totalReturned: 0,
+      filteredAvailable: 0,
+      totalAvailable: 0,
+      searchCacheHit: false,
+      exactRequestCacheHit: false,
+      stale: false,
+      sourceCounts: null,
+      timingsMs: null,
+      errorMessage: message,
+    });
   }
 }
 
@@ -7813,21 +8889,30 @@ async function handleDistributionStatsApi(req, res, url) {
     const localModelParam = (url.searchParams.get('localModel') || '').trim().toLowerCase();
     const usOnlyParam = (url.searchParams.get('usOnly') || '1').trim().toLowerCase();
     const resumeSelection = parseResumeSelectionFromParams(url.searchParams);
-    const requiresResume = Boolean(resumeSelection?.resumeId) || (Array.isArray(resumeSelection?.resumeIds) && resumeSelection.resumeIds.length > 0);
+    const builtInResumeIdParam = (url.searchParams.get('builtInResumeId') || '').trim().toLowerCase();
+    const validResumeIds = new Set(Object.keys(RESUME_PROFILES));
+    const hasBuiltInResume = builtInResumeIdParam && validResumeIds.has(builtInResumeIdParam);
+    const requiresResume = hasBuiltInResume || Boolean(resumeSelection?.resumeId) || (Array.isArray(resumeSelection?.resumeIds) && resumeSelection.resumeIds.length > 0);
     if (!requiresResume) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'A selected resume is required' }));
       return;
     }
-    if (requiresResume && !authUser) {
+    if (requiresResume && !hasBuiltInResume && !authUser) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Authentication required' }));
       return;
     }
-    const { resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection);
-    const resumeId = Array.isArray(resumeSelection.resumeIds) && resumeSelection.resumeIds.length > 0
+    let resumeKey, resumeProfile;
+    if (hasBuiltInResume) {
+      resumeKey = builtInResumeIdParam;
+      resumeProfile = RESUME_PROFILES[builtInResumeIdParam];
+    } else {
+      ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
+    }
+    const resumeId = Array.isArray(resumeSelection?.resumeIds) && resumeSelection.resumeIds.length > 0
       ? resumeSelection.resumeIds[0]
-      : String(resumeSelection.resumeId || '').trim();
+      : (hasBuiltInResume ? builtInResumeIdParam : String(resumeSelection?.resumeId || '').trim());
     const scoreWeights = parseScoreWeightsFromParams(url.searchParams);
 
     const sourcesParam = (url.searchParams.get('sources') || '').trim();
@@ -7906,21 +8991,19 @@ async function handleDistributionStatsApi(req, res, url) {
       : (rankingMode === 'ultra' ? true : LOCAL_MODEL_DEFAULT);
 
     const resumeScoresByJobId = new Map();
-
-    // Compute globalMaxRaw for stable resume scores
-    let globalMaxRaw = 0;
+    let curveMaxRaw = 1;
+    // Build resume score curve baseline from keyword-matched jobs.
     for (let idx = 0; idx < usFilteredJobs.length; idx += 1) {
       const job = usFilteredJobs[idx];
       const resumeScoreData = getResumeScoreCached(job, datasetKey, rankingMode, q, resumeProfile, resumeId);
       resumeScoresByJobId.set(job.id, resumeScoreData);
-      const r = resumeScoreData.rawScore || 0;
-      if (r > globalMaxRaw) globalMaxRaw = r;
+      const raw = Number(resumeScoreData?.rawScore || 0);
+      if (raw > curveMaxRaw) curveMaxRaw = raw;
 
       if (idx > 0 && idx % EVENT_LOOP_YIELD_INTERVAL === 0) {
         await yieldToEventLoop();
       }
     }
-    if (globalMaxRaw === 0) globalMaxRaw = 1;
 
     // Score every job across three dimensions using cached derived values.
     const withRaw = [];
@@ -7941,7 +9024,7 @@ async function handleDistributionStatsApi(req, res, url) {
     const scoredAll = [];
     for (let idx = 0; idx < withRaw.length; idx += 1) {
       const job = withRaw[idx];
-      const resumeScore = Math.round((job.rawScore / globalMaxRaw) * 100);
+      const resumeScore = Math.min(100, Math.max(0, Math.round((job.rawScore / Math.max(1, curveMaxRaw)) * 100)));
       const auditScore = getAuditScoreCached(job.company, datasetKey);
       const score = computeWeightedTotalScore(
         {
@@ -8432,6 +9515,7 @@ if (require.main === module) {
 
 module.exports = {
   buildResumeBreakdownPayload,
+  fetchJobSourceBatch,
   getResumeComparisonAlgorithmKey,
   buildCustomResumeProfile,
   scoreJobAgainstResumeClassic,

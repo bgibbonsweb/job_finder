@@ -119,7 +119,7 @@ function normalizeResumeCatalog(value) {
         sourceName: String(item?.sourceName || 'Upload').trim() || 'Upload',
         createdAt: item?.createdAt || null,
         updatedAt: item?.updatedAt || null,
-        type: 'uploaded',
+        type: String(item?.type || 'uploaded').trim() || 'uploaded',
       }
     })
     .filter(Boolean)
@@ -166,6 +166,7 @@ function formatResumeSelectionLabel(ids, catalogById) {
 function buildResumeRequestParams(selectedResumeIds, catalogById) {
   const ids = normalizeResumeSelection(selectedResumeIds)
   const primaryId = ids[0]
+
   if (ids.length > 1) {
     return {
       resumeMode: 'blend',
@@ -221,6 +222,10 @@ const SOURCE_LABELS = {
   angellist: 'AngelList',
   devto: 'Dev.to',
   jooble: 'Jooble',
+  reliefweb: 'ReliefWeb',
+  redditjobs: 'Reddit Jobs',
+  ziprecruiter: 'ZipRecruiter',
+  monster: 'Monster',
 }
 
 const JOB_FIELD_LABELS = {
@@ -539,7 +544,7 @@ function App() {
         const availableIds = new Set(uploadedResumes.map((item) => item.id))
         const normalizedPrevious = normalizeResumeSelection(selectedResumeIds).filter((id) => availableIds.has(id))
         const baselineSelection = urlResumeId
-          ? [urlResumeId]
+          ? (availableIds.has(urlResumeId) ? [urlResumeId] : [])
           : normalizedPrevious.length > 0
             ? normalizedPrevious
             : uploadedResumes.length > 0
@@ -943,7 +948,7 @@ function App() {
       if (finalResumeIds.length === 0) {
         const p = new URLSearchParams(window.location.search)
         const urlResumeId = String(p.get('resume') || '').trim()
-        if (urlResumeId) {
+        if (urlResumeId && resumeCatalogById.has(urlResumeId)) {
           finalResumeIds = [urlResumeId]
         }
       }
@@ -1041,7 +1046,7 @@ function App() {
         params.set('locationLat', String(locationOverride.coords.lat))
         params.set('locationLng', String(locationOverride.coords.lng))
       }
-  params.set('requestId', progressRequestId)
+      params.set('requestId', progressRequestId)
 
       const response = await fetch(`/api/jobs?${params.toString()}`, { signal: controller.signal })
 
@@ -1331,6 +1336,7 @@ function App() {
     const next = current.includes(resumeIdValue)
       ? current.filter((id) => id !== resumeIdValue)
       : [...current, resumeIdValue]
+
     setSelectedResumeIds(next)
     if (next.length > 0) {
       setResumeId(next[0])
