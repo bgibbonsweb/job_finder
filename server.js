@@ -3497,6 +3497,219 @@ async function fetchTheMuseJobs() {
   }
 }
 
+// ─── USAJOBS (Federal Government) ──────────────────────────────────────────
+
+function normalizeUSAJobsJob(hit) {
+  const title = String(hit?.position_title || 'Untitled role').trim() || 'Untitled role';
+  const agency = String(hit?.organization_name || hit?.department_name || 'Unknown agency').trim() || 'Unknown agency';
+  const locations = hit?.locations && Array.isArray(hit.locations)
+    ? hit.locations.map((loc) => String(loc || '').trim()).filter(Boolean)
+    : [];
+  const jobTypes = [];
+  if (hit?.job_grade) jobTypes.push(`Grade ${hit.job_grade}`);
+  if (hit?.employment_type) jobTypes.push(hit.employment_type);
+  if (hit?.work_schedule) jobTypes.push(hit.work_schedule);
+
+  const sourceText = [
+    title,
+    agency,
+    hit?.summary || '',
+    ...jobTypes,
+  ].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `usajobs_${hit?.id || slugify(`${agency}_${title}`)}`,
+    title,
+    company: agency,
+    locations: locations.length > 0 ? locations : ['Multiple Locations'],
+    remotePreferences: (hit?.remote_preference === true || String(hit?.remote_preference || '').toLowerCase() === 'true') ? ['Remote'] : [],
+    jobTypes,
+    datePosted: hit?.posted_date ? String(hit.posted_date).slice(0, 10) : null,
+    logo: null,
+    url: hit?.apply_uri || `https://www.usajobs.gov/GetJob/ViewDetails/${hit?.id || ''}`,
+    source: 'usajobs',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'large', // Federal government is always large
+  });
+}
+
+const USAJOBS_MAX_PAGES = Number(process.env.USAJOBS_MAX_PAGES || 100);
+
+async function fetchUSAJobsJobs() {
+  try {
+    const all = [];
+    const pageSize = 500; // Max per USAJOBS API
+    for (let page = 1; page <= USAJOBS_MAX_PAGES; page += 1) {
+      const skip = (page - 1) * pageSize;
+      const params = new URLSearchParams({
+        'page.from': skip,
+        'page.size': pageSize,
+        'include': 'remote_preference,work_schedule,position_level',
+      });
+
+      const r = await fetch(`https://data.usajobs.gov/api/search?${params.toString()}`, {
+        headers: {
+          'Authorization-Key': process.env.USAJOBS_API_KEY || 'TESTINGAPIKEYPLACEHOLDER',
+          'User-Agent': 'job-finder/1.0',
+        },
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+
+      if (!r.ok) {
+        console.log(`[usajobs] Stopped at page ${page} (HTTP ${r.status})`);
+        break;
+      }
+
+      const payload = await r.json();
+      const results = Array.isArray(payload?.SearchResult?.SearchResultItems)
+        ? payload.SearchResult.SearchResultItems.map((item) => item.MatchedObjectDescriptor)
+        : [];
+
+      if (results.length === 0) {
+        console.log(`[usajobs] Reached end at page ${page}`);
+        break;
+      }
+
+      all.push(...results);
+    }
+
+    const normalized = all.map(normalizeUSAJobsJob).filter((job) => job.id && job.title);
+    console.log(`[usajobs] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[usajobs] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Upwork (Freelance/Creative) ───────────────────────────────────────────
+
+function normalizeUpworkJob(hit) {
+  const title = String(hit?.title || 'Untitled role').trim() || 'Untitled role';
+  const skills = Array.isArray(hit?.skills) ? hit.skills.map((s) => String(s?.name || '').trim()).filter(Boolean) : [];
+  const company = 'Upwork Client'; // Upwork jobs are from various clients
+  const budget = hit?.budget?.currencyCode ? `${hit.budget.currencyCode} ${hit.budget.minimum}-${hit.budget.maximum}` : '';
+
+  const sourceText = [
+    title,
+    company,
+    ...skills,
+    hit?.description || '',
+  ].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `upwork_${hit?.id || slugify(title)}`,
+    title,
+    company,
+    locations: ['Remote'], // Upwork is remote-first
+    remotePreferences: ['Remote'],
+    jobTypes: [...skills, ...(budget ? [budget] : [])],
+    datePosted: hit?.date_posted ? String(hit.date_posted).slice(0, 10) : null,
+    logo: null,
+    url: hit?.url || `https://www.upwork.com/jobs/${hit?.id || ''}`,
+    source: 'upwork',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: 'small',
+  });
+}
+
+const UPWORK_MAX_PAGES = Number(process.env.UPWORK_MAX_PAGES || 50);
+
+async function fetchUpworkJobs() {
+  try {
+    // Note: Upwork's official API is rate-limited for free tier.
+    // Using public job listings endpoint as fallback.
+    const all = [];
+
+    // Upwork public search doesn't have a direct JSON API, but we can try the feed.
+    // For now, returning empty to avoid rate limiting. Consider adding API key.
+    console.log('[upwork] 0 jobs (API requires authentication)');
+    return [];
+  } catch (err) {
+    console.log(`[upwork] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
+// ─── Dice (Tech & Trades) ──────────────────────────────────────────────────
+
+function normalizeDiceJob(hit) {
+  const title = String(hit?.jobTitle || 'Untitled role').trim() || 'Untitled role';
+  const company = String(hit?.company || 'Unknown company').trim() || 'Unknown company';
+  const locations = [];
+  if (hit?.city) locations.push(hit.city);
+  if (hit?.state) locations.push(hit.state);
+  if (hit?.country) locations.push(hit.country);
+
+  const isRemote = String(hit?.isRemote || 'false').toLowerCase() === 'true';
+  const sourceText = [
+    title,
+    company,
+    ...locations,
+    hit?.jobDescription || '',
+  ].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `dice_${hit?.jobId || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations: locations.length > 0 ? locations : ['Multiple Locations'],
+    remotePreferences: isRemote ? ['Remote'] : [],
+    jobTypes: [],
+    datePosted: hit?.postedDate ? String(hit.postedDate).slice(0, 10) : null,
+    logo: null,
+    url: hit?.jobUrl || `https://www.dice.com/jobs?q=${encodeURIComponent(title)}`,
+    source: 'dice',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+const DICE_MAX_PAGES = Number(process.env.DICE_MAX_PAGES || 50);
+
+async function fetchDiceJobs() {
+  try {
+    // Dice provides job listings via their public endpoint
+    const all = [];
+    for (let page = 1; page <= DICE_MAX_PAGES; page += 1) {
+      const params = new URLSearchParams({
+        'country': 'US',
+        'page': page,
+        'pageSize': 100,
+      });
+
+      const r = await fetch(`https://api.dice.com/rest/v2/jobs?${params.toString()}`, {
+        headers: {
+          'User-Agent': 'job-finder/1.0',
+        },
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+
+      if (!r.ok) {
+        console.log(`[dice] Stopped at page ${page} (HTTP ${r.status})`);
+        break;
+      }
+
+      const payload = await r.json();
+      const results = Array.isArray(payload?.data) ? payload.data : [];
+
+      if (results.length === 0) {
+        console.log(`[dice] Reached end at page ${page}`);
+        break;
+      }
+
+      all.push(...results);
+    }
+
+    const normalized = all.map(normalizeDiceJob).filter((job) => job.id && job.title);
+    console.log(`[dice] ${normalized.length} jobs`);
+    return normalized;
+  } catch (err) {
+    console.log(`[dice] 0 jobs (error: ${err.message})`);
+    return [];
+  }
+}
+
 // ─── Combined Ingestion ────────────────────────────────────────────────────
 async function fetchAllJobs() {
   const [
@@ -3513,6 +3726,9 @@ async function fetchAllJobs() {
     remotiveJobs,
     arbeitnowJobs,
     themuseJobs,
+    usajobsJobs,
+    upworkJobs,
+    diceJobs,
   ] = await Promise.all([
     fetchClimatebaseJobs(),
     fetchGreenhouseJobs(),
@@ -3527,6 +3743,9 @@ async function fetchAllJobs() {
     fetchRemotiveJobs(),
     fetchArbeitnowJobs(),
     fetchTheMuseJobs(),
+    fetchUSAJobsJobs(),
+    fetchUpworkJobs(),
+    fetchDiceJobs(),
   ]);
 
   // Deduplicate by source-specific identity first so cross-platform duplicates are retained.
@@ -3547,6 +3766,9 @@ async function fetchAllJobs() {
     ...remotiveJobs,
     ...arbeitnowJobs,
     ...themuseJobs,
+    ...usajobsJobs,
+    ...upworkJobs,
+    ...diceJobs,
   ]) {
     const source = String(job?.source || '').trim().toLowerCase();
     const stableId = String(job?.id || '').trim();
@@ -3572,7 +3794,10 @@ async function fetchAllJobs() {
     ` remoteok: ${remoteokJobs.length},` +
     ` remotive: ${remotiveJobs.length},` +
     ` arbeitnow: ${arbeitnowJobs.length},` +
-    ` themuse: ${themuseJobs.length})`,
+    ` themuse: ${themuseJobs.length},` +
+    ` usajobs: ${usajobsJobs.length},` +
+    ` upwork: ${upworkJobs.length},` +
+    ` dice: ${diceJobs.length})`,
   );
   return all;
 }

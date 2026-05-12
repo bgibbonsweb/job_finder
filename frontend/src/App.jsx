@@ -197,6 +197,9 @@ const SOURCE_LABELS = {
   remotive: 'Remotive',
   arbeitnow: 'Arbeitnow',
   themuse: 'The Muse',
+  usajobs: 'USAJOBS',
+  upwork: 'Upwork',
+  dice: 'Dice',
 }
 
 const JOB_FIELD_LABELS = {
