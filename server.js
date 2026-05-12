@@ -53,11 +53,7 @@ const OPENCORPORATES_API_TOKEN = String(process.env.OPENCORPORATES_API_TOKEN || 
 const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
 const PERPLEXITY_API_KEY = String(process.env.PERPLEXITY_API_KEY || '').trim();
 const SEC_TICKERS_CACHE_TTL_MS = Number(process.env.SEC_TICKERS_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
-const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 500);
-const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 1500000);
 const BUILTIN_FETCH_CONCURRENCY = Number(process.env.BUILTIN_FETCH_CONCURRENCY || 12);
-const ARBEITNOW_MAX_PAGES = Number(process.env.ARBEITNOW_MAX_PAGES || 1000);
-const THEMUSE_MAX_PAGES = Number(process.env.THEMUSE_MAX_PAGES || 10000);
 const TERRA_BOARD_URL = 'https://www.terra.do/climate-jobs/job-board/';
 const EIGHTYKHOURS_APP_ID = 'W6KM1UDIB3';
 const EIGHTYKHOURS_API_KEY = 'd1d7f2c8696e7b36837d5ed337c4a319';
@@ -68,13 +64,11 @@ const ALGOLIA_APP_ID = '8PSNFFQTXQ';
 const ALGOLIA_API_KEY = 'd2ebe27d3cc3d35fea04da7b1b0718a8';
 const ALGOLIA_INDEX = 'Job_production';
 const ALGOLIA_HITS_PER_PAGE = 100;
-const ALGOLIA_MAX_PAGES = Number(process.env.ALGOLIA_MAX_PAGES || 200);
 const ALGOLIA_PAGE_CONCURRENCY = Number(process.env.ALGOLIA_PAGE_CONCURRENCY || 24);
 const ALGOLIA_MIN_WINDOW_DAYS = Number(process.env.ALGOLIA_MIN_WINDOW_DAYS || 14);
 const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 12);
 // Extreme-volume default: start from year 2000; override with ALGOLIA_START_EPOCH env var
 const ALGOLIA_START_EPOCH = Number(process.env.ALGOLIA_START_EPOCH || 946684800);
-const ALGOLIA_MAX_TOTAL_JOBS = Number(process.env.ALGOLIA_MAX_TOTAL_JOBS || 1000000);
 const ALGOLIA_CATEGORY_CONCURRENCY = Number(process.env.ALGOLIA_CATEGORY_CONCURRENCY || 6);
 const ALGOLIA_FETCH_RETRIES = Number(process.env.ALGOLIA_FETCH_RETRIES || 3);
 
@@ -3142,11 +3136,7 @@ async function fetchBambooJobs() {
 async function fetchBuiltInJobs() {
   const jobUrls = new Set();
 
-  for (let page = 1; page <= BUILTIN_MAX_PAGES; page += 1) {
-    if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) {
-      console.log(`[builtin] hit discovered URL cap (${BUILTIN_MAX_DISCOVERED_URLS}), stopping pagination early`);
-      break;
-    }
+  for (let page = 1; ; page += 1) {
     const url = `https://builtin.com/jobs?page=${page}`;
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS) });
@@ -3157,7 +3147,6 @@ async function fetchBuiltInJobs() {
       const uniqueMatches = Array.from(new Set(matches));
       if (uniqueMatches.length === 0) break;
       for (const m of uniqueMatches) {
-        if (jobUrls.size >= BUILTIN_MAX_DISCOVERED_URLS) break;
         jobUrls.add(m);
       }
 
@@ -3416,7 +3405,7 @@ async function fetchArbeitnowJobs() {
   try {
     const all = [];
     let page = 1;
-    while (page <= ARBEITNOW_MAX_PAGES) {
+    while (true) {
       const r = await fetch(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
         signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
       });
@@ -3472,7 +3461,7 @@ async function fetchTheMuseJobs() {
   try {
     const all = [];
     let page = 1;
-    while (page <= THEMUSE_MAX_PAGES) {
+    while (true) {
       const r = await fetch(`https://www.themuse.com/api/public/jobs?page=${page}`, {
         signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
       });
@@ -3533,13 +3522,13 @@ function normalizeUSAJobsJob(hit) {
   });
 }
 
-const USAJOBS_MAX_PAGES = Number(process.env.USAJOBS_MAX_PAGES || 100);
+
 
 async function fetchUSAJobsJobs() {
   try {
     const all = [];
     const pageSize = 500; // Max per USAJOBS API
-    for (let page = 1; page <= USAJOBS_MAX_PAGES; page += 1) {
+    for (let page = 1; ; page += 1) {
       const skip = (page - 1) * pageSize;
       const params = new URLSearchParams({
         'page.from': skip,
@@ -3613,7 +3602,7 @@ function normalizeUpworkJob(hit) {
   });
 }
 
-const UPWORK_MAX_PAGES = Number(process.env.UPWORK_MAX_PAGES || 50);
+
 
 async function fetchUpworkJobs() {
   try {
@@ -3665,13 +3654,13 @@ function normalizeDiceJob(hit) {
   });
 }
 
-const DICE_MAX_PAGES = Number(process.env.DICE_MAX_PAGES || 50);
+
 
 async function fetchDiceJobs() {
   try {
     // Dice provides job listings via their public endpoint
     const all = [];
-    for (let page = 1; page <= DICE_MAX_PAGES; page += 1) {
+    for (let page = 1; ; page += 1) {
       const params = new URLSearchParams({
         'country': 'US',
         'page': page,
@@ -3884,10 +3873,9 @@ async function fetchClimatebaseJobs() {
     });
 
     const totalPages = Math.max(1, Number(firstPage.nbPages || 1));
-    const pagesToFetch = Math.min(totalPages, ALGOLIA_MAX_PAGES);
     let hits = firstPage.hits || [];
 
-    for (let start = 1; start < pagesToFetch; start += ALGOLIA_PAGE_CONCURRENCY) {
+    for (let start = 1; start < totalPages; start += ALGOLIA_PAGE_CONCURRENCY) {
       const batchPages = [];
       const end = Math.min(start + ALGOLIA_PAGE_CONCURRENCY, pagesToFetch);
       for (let page = start; page < end; page += 1) {
@@ -3910,7 +3898,7 @@ async function fetchClimatebaseJobs() {
 
     // Saturated at page cap — split time window and recurse to recover more hits
     if (
-      nbPages >= ALGOLIA_MAX_PAGES &&
+      false &&
       depth < ALGOLIA_MAX_SPLIT_DEPTH &&
       windowSecs > minWindowSecs
     ) {
@@ -3933,20 +3921,14 @@ async function fetchClimatebaseJobs() {
     );
     for (const hits of results) {
       for (const hit of hits) {
-        if (uniqueById.size >= ALGOLIA_MAX_TOTAL_JOBS) break;
         const id = String(hit.id || hit.objectID || '');
         if (!id || uniqueById.has(id)) continue;
         const normalized = normalizeJob(hit);
         if (!normalized.id || !normalized.title) continue;
         uniqueById.set(id, normalized);
       }
-      if (uniqueById.size >= ALGOLIA_MAX_TOTAL_JOBS) break;
     }
     console.log(`[ingest] ${Math.min(i + ALGOLIA_CATEGORY_CONCURRENCY, categories.length)}/${categories.length} categories done — ${uniqueById.size} jobs`);
-    if (uniqueById.size >= ALGOLIA_MAX_TOTAL_JOBS) {
-      console.log(`[ingest] Hit max total jobs cap (${ALGOLIA_MAX_TOTAL_JOBS}), stopping early`);
-      break;
-    }
   }
 
   console.log(`[ingest] Complete: ${uniqueById.size} total jobs`);
