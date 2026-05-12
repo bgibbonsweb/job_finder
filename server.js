@@ -53,8 +53,8 @@ const OPENCORPORATES_API_TOKEN = String(process.env.OPENCORPORATES_API_TOKEN || 
 const FMP_API_KEY = String(process.env.FMP_API_KEY || '').trim();
 const PERPLEXITY_API_KEY = String(process.env.PERPLEXITY_API_KEY || '').trim();
 const SEC_TICKERS_CACHE_TTL_MS = Number(process.env.SEC_TICKERS_CACHE_TTL_MS || 24 * 60 * 60 * 1000);
-const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 20);
-const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 30000);
+const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 60);
+const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 120000);
 const BUILTIN_FETCH_CONCURRENCY = 8;
 const TERRA_BOARD_URL = 'https://www.terra.do/climate-jobs/job-board/';
 const EIGHTYKHOURS_APP_ID = 'W6KM1UDIB3';
@@ -66,14 +66,14 @@ const ALGOLIA_APP_ID = '8PSNFFQTXQ';
 const ALGOLIA_API_KEY = 'd2ebe27d3cc3d35fea04da7b1b0718a8';
 const ALGOLIA_INDEX = 'Job_production';
 const ALGOLIA_HITS_PER_PAGE = 100;
-const ALGOLIA_MAX_PAGES = Number(process.env.ALGOLIA_MAX_PAGES || 10); // Algolia page cap is usually 10
-const ALGOLIA_PAGE_CONCURRENCY = Number(process.env.ALGOLIA_PAGE_CONCURRENCY || 8);
+const ALGOLIA_MAX_PAGES = Number(process.env.ALGOLIA_MAX_PAGES || 30);
+const ALGOLIA_PAGE_CONCURRENCY = Number(process.env.ALGOLIA_PAGE_CONCURRENCY || 12);
 const ALGOLIA_MIN_WINDOW_DAYS = Number(process.env.ALGOLIA_MIN_WINDOW_DAYS || 14);
-const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 6);
-// Default to jobs posted within the last year; override with ALGOLIA_START_EPOCH env var
-const ALGOLIA_START_EPOCH = Number(process.env.ALGOLIA_START_EPOCH || Math.floor((Date.now() - 365 * 24 * 60 * 60 * 1000) / 1000));
-const ALGOLIA_MAX_TOTAL_JOBS = Number(process.env.ALGOLIA_MAX_TOTAL_JOBS || 60000);
-const ALGOLIA_CATEGORY_CONCURRENCY = Number(process.env.ALGOLIA_CATEGORY_CONCURRENCY || 2);
+const ALGOLIA_MAX_SPLIT_DEPTH = Number(process.env.ALGOLIA_MAX_SPLIT_DEPTH || 8);
+// Max-volume default: last 5 years; override with ALGOLIA_START_EPOCH env var
+const ALGOLIA_START_EPOCH = Number(process.env.ALGOLIA_START_EPOCH || Math.floor((Date.now() - 5 * 365 * 24 * 60 * 60 * 1000) / 1000));
+const ALGOLIA_MAX_TOTAL_JOBS = Number(process.env.ALGOLIA_MAX_TOTAL_JOBS || 180000);
+const ALGOLIA_CATEGORY_CONCURRENCY = Number(process.env.ALGOLIA_CATEGORY_CONCURRENCY || 3);
 const ALGOLIA_FETCH_RETRIES = Number(process.env.ALGOLIA_FETCH_RETRIES || 3);
 
 let jobsCache = [];
