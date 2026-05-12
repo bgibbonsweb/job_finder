@@ -194,6 +194,8 @@ const SOURCE_LABELS = {
   terra: 'Terra.do',
   eightyk: '80,000 Hours',
   remoteok: 'RemoteOK',
+  remotive: 'Remotive',
+  arbeitnow: 'Arbeitnow',
 }
 
 const JOB_FIELD_LABELS = {

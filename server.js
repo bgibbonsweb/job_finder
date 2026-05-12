@@ -56,6 +56,7 @@ const SEC_TICKERS_CACHE_TTL_MS = Number(process.env.SEC_TICKERS_CACHE_TTL_MS || 
 const BUILTIN_MAX_PAGES = Number(process.env.BUILTIN_MAX_PAGES || 60);
 const BUILTIN_MAX_DISCOVERED_URLS = Number(process.env.BUILTIN_MAX_DISCOVERED_URLS || 120000);
 const BUILTIN_FETCH_CONCURRENCY = 8;
+const ARBEITNOW_MAX_PAGES = Number(process.env.ARBEITNOW_MAX_PAGES || 40);
 const TERRA_BOARD_URL = 'https://www.terra.do/climate-jobs/job-board/';
 const EIGHTYKHOURS_APP_ID = 'W6KM1UDIB3';
 const EIGHTYKHOURS_API_KEY = 'd1d7f2c8696e7b36837d5ed337c4a319';
@@ -3326,9 +3327,134 @@ async function fetchRemoteOKJobs() {
   }
 }
 
+function inferJobFieldFromText(text) {
+  const t = String(text || '').toLowerCase();
+  if (/health|medical|clinical|pharma|biotech/.test(t)) return 'medical';
+  if (/edtech|education|learning|teaching|school|university/.test(t)) return 'edtech';
+  if (/mental|wellness|therapy|psychiatry|psychology/.test(t)) return 'mentalhealth';
+  if (/agtech|agriculture|food|farm/.test(t)) return 'agtech';
+  if (/global health|humanitarian|international development|public health|ngo/.test(t)) return 'globalhealth';
+  return 'climate';
+}
+
+function normalizeRemotiveJob(hit) {
+  const title = String(hit?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(hit?.company_name || 'Unknown company').trim() || 'Unknown company';
+  const category = String(hit?.category || '').trim();
+  const locations = [String(hit?.candidate_required_location || 'Remote').trim() || 'Remote'];
+  const publicationDate = hit?.publication_date ? String(hit.publication_date).slice(0, 10) : null;
+  const sourceText = [
+    title,
+    company,
+    category,
+    ...(Array.isArray(hit?.tags) ? hit.tags : []),
+    String(hit?.description || ''),
+  ].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `rm_${hit?.id || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations,
+    remotePreferences: ['Remote'],
+    jobTypes: category ? [category] : [],
+    datePosted: publicationDate,
+    logo: hit?.company_logo_url || null,
+    url: hit?.url || 'https://remotive.com/remote-jobs',
+    source: 'remotive',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchRemotiveJobs() {
+  try {
+    const r = await fetch('https://remotive.com/api/remote-jobs', {
+      signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+    });
+    if (!r.ok) {
+      console.log('[remotive] 0 jobs');
+      return [];
+    }
+
+    const payload = await r.json();
+    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : [];
+    const normalized = jobs.map(normalizeRemotiveJob).filter((job) => job.id && job.title);
+    console.log(`[remotive] ${normalized.length} jobs`);
+    return normalized;
+  } catch {
+    console.log('[remotive] 0 jobs');
+    return [];
+  }
+}
+
+function normalizeArbeitnowJob(hit) {
+  const title = String(hit?.title || 'Untitled role').trim() || 'Untitled role';
+  const company = String(hit?.company_name || 'Unknown company').trim() || 'Unknown company';
+  const locations = Array.isArray(hit?.location) ? hit.location : [String(hit?.location || '').trim()].filter(Boolean);
+  const tags = Array.isArray(hit?.tags) ? hit.tags : [];
+  const sourceText = [title, company, ...tags, String(hit?.description || '')].join(' ');
+
+  return hydrateEndProductCategory({
+    id: `an_${hit?.slug || slugify(`${company}_${title}`)}`,
+    title,
+    company,
+    locations,
+    remotePreferences: Boolean(hit?.remote) ? ['Remote'] : [],
+    jobTypes: tags,
+    datePosted: hit?.created_at ? String(hit.created_at).slice(0, 10) : null,
+    logo: null,
+    url: hit?.url || `https://www.arbeitnow.com/jobs/${hit?.slug || ''}`,
+    source: 'arbeitnow',
+    jobField: inferJobFieldFromText(sourceText),
+    companySize: classifyCompanySize(company),
+  });
+}
+
+async function fetchArbeitnowJobs() {
+  try {
+    const all = [];
+    let page = 1;
+    while (page <= ARBEITNOW_MAX_PAGES) {
+      const r = await fetch(`https://www.arbeitnow.com/api/job-board-api?page=${page}`, {
+        signal: AbortSignal.timeout(ATS_FETCH_TIMEOUT_MS),
+      });
+      if (!r.ok) break;
+      const payload = await r.json();
+      const jobs = Array.isArray(payload?.data) ? payload.data : [];
+      if (jobs.length === 0) break;
+      all.push(...jobs);
+
+      const hasNext = Boolean(payload?.links?.next);
+      if (!hasNext) break;
+      page += 1;
+    }
+
+    const normalized = all.map(normalizeArbeitnowJob).filter((job) => job.id && job.title);
+    console.log(`[arbeitnow] ${normalized.length} jobs`);
+    return normalized;
+  } catch {
+    console.log('[arbeitnow] 0 jobs');
+    return [];
+  }
+}
+
 // ─── Combined Ingestion ────────────────────────────────────────────────────
 async function fetchAllJobs() {
-  const [climatebaseJobs, greenhouseJobs, leverJobs, ashbyJobs, breezyJobs, bambooJobs, builtInJobs, terraJobs, eightykJobs, remoteokJobs] = await Promise.all([
+  const [
+    climatebaseJobs,
+    greenhouseJobs,
+    leverJobs,
+    ashbyJobs,
+    breezyJobs,
+    bambooJobs,
+    builtInJobs,
+    terraJobs,
+    eightykJobs,
+    remoteokJobs,
+    remotiveJobs,
+    arbeitnowJobs,
+  ] = await Promise.all([
     fetchClimatebaseJobs(),
     fetchGreenhouseJobs(),
     fetchLeverJobs(),
@@ -3339,12 +3465,27 @@ async function fetchAllJobs() {
     fetchTerraJobs(),
     fetch80kHoursJobs(),
     fetchRemoteOKJobs(),
+    fetchRemotiveJobs(),
+    fetchArbeitnowJobs(),
   ]);
 
   // Deduplicate by title+company key; climatebase takes precedence
   const seen = new Set();
   const all = [];
-  for (const job of [...climatebaseJobs, ...greenhouseJobs, ...leverJobs, ...ashbyJobs, ...breezyJobs, ...bambooJobs, ...builtInJobs, ...terraJobs, ...eightykJobs, ...remoteokJobs]) {
+  for (const job of [
+    ...climatebaseJobs,
+    ...greenhouseJobs,
+    ...leverJobs,
+    ...ashbyJobs,
+    ...breezyJobs,
+    ...bambooJobs,
+    ...builtInJobs,
+    ...terraJobs,
+    ...eightykJobs,
+    ...remoteokJobs,
+    ...remotiveJobs,
+    ...arbeitnowJobs,
+  ]) {
     const key = `${slugify(job.title)}_${slugify(job.company)}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -3362,7 +3503,9 @@ async function fetchAllJobs() {
     ` builtin: ${builtInJobs.length},` +
     ` terra: ${terraJobs.length},` +
     ` 80khours: ${eightykJobs.length},` +
-    ` remoteok: ${remoteokJobs.length})`,
+    ` remoteok: ${remoteokJobs.length},` +
+    ` remotive: ${remotiveJobs.length},` +
+    ` arbeitnow: ${arbeitnowJobs.length})`,
   );
   return all;
 }
