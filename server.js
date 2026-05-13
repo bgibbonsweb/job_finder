@@ -8671,15 +8671,19 @@ async function handleResumesApi(req, res) {
   if (req.method === 'GET') {
     const resumeData = getAnonymousResumeForUser(anonUserId);
     const now = Date.now();
+    const resumeId = `anonymous-${anonUserId}`;
     
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      resume: resumeData ? {
+      uploadedResumes: resumeData ? [{
+        id: resumeId,
         name: 'Current Resume',
+        sourceName: 'Upload',
         uploadedAt: new Date(resumeData.uploadedAt).toISOString(),
         expiresAt: new Date(resumeData.expiresAt).toISOString(),
         expiresInMs: Math.max(0, resumeData.expiresAt - now),
-      } : null,
+        type: 'uploaded',
+      }] : [],
     }));
     return;
   }
@@ -8730,14 +8734,18 @@ async function handleResumesApi(req, res) {
           saveAnonymousResumeForUser(anonUserId, normalizedText, profile);
 
           const expiresAt = Date.now() + ANONYMOUS_RESUME_TTL_MS;
+          const resumeId = `anonymous-${anonUserId}`;
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             status: 'saved',
             resume: {
+              id: resumeId,
               name: 'Current Resume',
+              sourceName: 'Upload',
               uploadedAt: new Date().toISOString(),
               expiresAt: new Date(expiresAt).toISOString(),
               expiresInMs: ANONYMOUS_RESUME_TTL_MS,
+              type: 'uploaded',
             },
           }));
         } catch (err) {
@@ -8778,14 +8786,18 @@ async function handleResumesApi(req, res) {
         saveAnonymousResumeForUser(anonUserId, text, profile);
 
         const expiresAt = Date.now() + ANONYMOUS_RESUME_TTL_MS;
+        const resumeId = `anonymous-${anonUserId}`;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'saved',
           resume: {
+            id: resumeId,
             name: 'Current Resume',
+            sourceName: 'Upload',
             uploadedAt: new Date().toISOString(),
             expiresAt: new Date(expiresAt).toISOString(),
             expiresInMs: ANONYMOUS_RESUME_TTL_MS,
+            type: 'uploaded',
           },
         }));
       } catch (err) {
