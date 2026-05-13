@@ -1532,10 +1532,7 @@ function App() {
   }
 
   async function launchOnboardingSearch() {
-    if (!googleUser) {
-      setOnboardingError('Please create an account or sign in to continue.')
-      return
-    }
+    // Allow anonymous users to proceed; no account required
     if (selectedResumeIds.length === 0) {
       setOnboardingError('Please upload and select at least one resume.')
       return
