@@ -1585,7 +1585,7 @@ function App() {
 
     try {
       const response = await fetch(`/api/resumes?resumeId=${encodeURIComponent(targetId)}`, {
-        method: 'DELETE',
+       
         signal: AbortSignal.timeout(12000),
       })
       if (!response.ok) {
@@ -3074,6 +3074,30 @@ function App() {
             ))
           )}
         </section>
+        <div className="pager">
+          <button type="button" className="ghost arrow" onClick={handlePrevPage} disabled={isLoading || currentPage <= 1}>
+            ←
+          </button>
+          <input
+            type="number"
+            className="page-input"
+            min="1"
+            max={totalPages}
+            value={pageInputValue}
+            onChange={handlePageInputChange}
+            onKeyDown={handlePageInputKeyDown}
+            onBlur={() => setPageInputValue(String(currentPage))}
+            aria-label="Current page"
+            disabled={isLoading}
+          />
+          <span className="pager-info">
+            <span className="pager-total">of {totalPages}</span>
+            {filteredAvailable ? <span className="pager-matches">{filteredAvailable.toLocaleString()} matches</span> : null}
+          </span>
+          <button type="button" className="ghost arrow" onClick={handleNextPage} disabled={isLoading || currentPage >= totalPages}>
+            →
+          </button>
+        </div>
           {scoreStats ? (
             <div className="score-distribution-widget">
               <div className="distribution-hero-label">Resume score distribution</div>
