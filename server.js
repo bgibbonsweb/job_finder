@@ -342,6 +342,51 @@ function buildResumeBreakdownPayload(record, profile) {
   };
 }
 
+function buildResumeBreakdownFromProfile(resumeText, profile, name) {
+  const topKeywords = Object.entries(profile?.termWeights || {})
+    .sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0))
+    .slice(0, 30)
+    .map(([term, weight]) => ({ term, weight: Number(weight) }));
+
+  const facetsList = Object.entries(profile?.matchFacets || {})
+    .map(([facet, keywords]) => ({
+      facet,
+      keywords: Array.isArray(keywords) ? keywords.slice(0, 8) : [],
+    }));
+
+  const anchorPhrases = Array.isArray(profile?.anchors) ? profile.anchors.slice(0, 12) : [];
+  const signals = Array.isArray(profile?.signalPhrases)
+    ? profile.signalPhrases.slice(0, 12).map((s) => ({
+      phrase: Array.isArray(s) ? s[0] : s,
+      impact: Array.isArray(s) ? s[1] : 1,
+    }))
+    : [];
+
+  const skills = profile?.resumeSkills
+    ? Array.from(profile.resumeSkills).slice(0, 20)
+    : [];
+
+  const extractedText = String(profile?.profileText || '').substring(0, 400);
+
+  return {
+    resumeId: 'anonymous',
+    resumeName: name || 'Current Resume',
+    resumeSource: 'Upload',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    breakdown: {
+      topKeywords,
+      facets: facetsList,
+      anchors: anchorPhrases,
+      signalPhrases: signals,
+      skills,
+      extractedText,
+      aiSummary: 'This breakdown is computed from extracted resume text, keyword weights, facets, and signal phrases. No generative AI is used to build the profile itself.',
+      scoringMethod: 'Keyword-based profile matching with term weights and facet signals',
+    },
+  };
+}
+
 function cleanupExpiredRequestProgress(now = Date.now()) {
   for (const [key, entry] of requestProgressCache.entries()) {
     if (!entry || !Number.isFinite(entry.updatedAt) || now - entry.updatedAt > REQUEST_PROGRESS_TTL_MS) {
@@ -8515,9 +8560,6 @@ async function handleBookmarksApi(req, res) {
 }
 
 async function handleResumeBreakdownApi(req, res, url) {
-  const authUser = requireAuthUser(req, res);
-  if (!authUser) return;
-
   if (req.method !== 'GET') {
     res.writeHead(405, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Method not allowed' }));
@@ -8530,6 +8572,41 @@ async function handleResumeBreakdownApi(req, res, url) {
     res.end(JSON.stringify({ error: 'resumeId parameter required' }));
     return;
   }
+
+  // Check if this is an anonymous resume
+  if (resumeId.startsWith('anonymous-')) {
+    const anonUserId = resumeId.substring('anonymous-'.length);
+    const resumeData = getAnonymousResumeForUser(anonUserId);
+    if (!resumeData) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Resume not found or expired' }));
+      return;
+    }
+
+    const profile = resumeData.profile;
+    if (!profile) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Failed to build profile' }));
+      return;
+    }
+
+    const breakdownCacheKey = `anon-${anonUserId}-breakdown`;
+    let payload = resumeBreakdownCache.get(breakdownCacheKey);
+    if (!payload) {
+      // Build breakdown from anonymous resume data
+      payload = buildResumeBreakdownFromProfile(resumeData.text, profile, 'Current Resume');
+      resumeBreakdownCache.set(breakdownCacheKey, payload);
+      trimMapCacheToLimit(resumeBreakdownCache, RESUME_BREAKDOWN_CACHE_MAX);
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(payload));
+    return;
+  }
+
+  // Authenticated user resume
+  const authUser = requireAuthUser(req, res);
+  if (!authUser) return;
 
   const record = getUploadedResumeRecordForUser(authUser.id, resumeId);
   if (!record) {
