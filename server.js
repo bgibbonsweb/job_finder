@@ -7780,12 +7780,23 @@ async function handleJobsApi(req, res, url) {
     if (hasBuiltInResume) {
       resumeKey = resumeId;
       resumeProfile = RESUME_PROFILES[resumeId];
+    } else if (resumeSelection?.resumeId?.startsWith('anonymous-')) {
+      // Handle anonymous resume ID directly
+      const anonUserId = resumeSelection.resumeId.substring('anonymous-'.length);
+      const anonResume = getAnonymousResumeForUser(anonUserId);
+      if (!anonResume) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Resume not found or expired' }));
+        return;
+      }
+      resumeKey = `anonymous:${anonUserId}`;
+      resumeProfile = anonResume.profile;
     } else {
       // Try authenticated user first
       if (authUser) {
         ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
       } else {
-        // Try anonymous user's resume
+        // Try anonymous user's resume (fallback - no specific resumeId provided)
         const anonUserId = getOrCreateAnonymousUser(req, res);
         const anonResume = getAnonymousResumeForUser(anonUserId);
         if (!anonResume) {
@@ -9155,12 +9166,23 @@ async function handleDistributionStatsApi(req, res, url) {
     if (hasBuiltInResume) {
       resumeKey = builtInResumeIdParam;
       resumeProfile = RESUME_PROFILES[builtInResumeIdParam];
+    } else if (resumeSelection?.resumeId?.startsWith('anonymous-')) {
+      // Handle anonymous resume ID directly
+      const anonUserId = resumeSelection.resumeId.substring('anonymous-'.length);
+      const anonResume = getAnonymousResumeForUser(anonUserId);
+      if (!anonResume) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Resume not found or expired' }));
+        return;
+      }
+      resumeKey = `anonymous:${anonUserId}`;
+      resumeProfile = anonResume.profile;
     } else {
       // Try authenticated user first
       if (authUser) {
         ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
       } else {
-        // Try anonymous user's resume
+        // Try anonymous user's resume (fallback - no specific resumeId provided)
         const anonUserId = getOrCreateAnonymousUser(req, res);
         const anonResume = getAnonymousResumeForUser(anonUserId);
         if (!anonResume) {
