@@ -398,7 +398,7 @@ function App() {
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [isAuthResolved, setIsAuthResolved] = useState(false)
   const [isAuthSubmitting, setIsAuthSubmitting] = useState(false)
-  const [onboardingPage, setOnboardingPage] = useState(1)
+  const [onboardingPage, setOnboardingPage] = useState(2)
   const [selectedOnboardingJobOptions, setSelectedOnboardingJobOptions] = useState([])
   const [onboardingCustomQuery, setOnboardingCustomQuery] = useState('')
   const [isOnboardingLocationConfirmed, setIsOnboardingLocationConfirmed] = useState(false)
@@ -457,7 +457,7 @@ function App() {
 
   useEffect(() => {
     if (!isOnboardingOpen || hasResolvedOnboardingLandingRef.current) return
-    setOnboardingPage(googleUser ? 2 : 1)
+    setOnboardingPage(2)
     hasResolvedOnboardingLandingRef.current = true
   }, [isOnboardingOpen, resumeCatalog.length, googleUser])
 
@@ -482,7 +482,7 @@ function App() {
           setOnboardingError('')
         } else {
           setIsOnboardingOpen(true)
-          setOnboardingPage(1)
+          setOnboardingPage(2)
         }
       })
       .catch((err) => {
@@ -491,7 +491,7 @@ function App() {
           setGoogleUser(null)
           window.localStorage.removeItem(ONBOARDING_COMPLETE_STORAGE_KEY)
           setIsOnboardingOpen(true)
-          setOnboardingPage(1)
+          setOnboardingPage(2)
           setOnboardingError('')
         }
       })
@@ -511,7 +511,7 @@ function App() {
     if (googleUser) return
     window.localStorage.removeItem(ONBOARDING_COMPLETE_STORAGE_KEY)
     setIsOnboardingOpen(true)
-    setOnboardingPage(1)
+    setOnboardingPage(2)
     setOnboardingError('')
   }, [isAuthResolved, googleUser])
 
@@ -1501,7 +1501,6 @@ function App() {
   }
 
   function canAdvanceOnboarding(page = onboardingPage) {
-    if (page === 1) return Boolean(googleUser)
     if (page === 2) return selectedResumeIds.length > 0
     if (page === 3) return isOnboardingLocationConfirmed
     if (page === 4) return Boolean(onboardingSearchQuery)
@@ -1510,7 +1509,6 @@ function App() {
 
   function handleOnboardingNext() {
     if (!canAdvanceOnboarding()) {
-      if (onboardingPage === 1) setOnboardingError('Please create an account or sign in to continue.')
       if (onboardingPage === 2) setOnboardingError('Please upload and select at least one resume.')
       if (onboardingPage === 3) setOnboardingError('Please select a location or choose "Search all locations" to continue.')
       if (onboardingPage === 4) setOnboardingError('Pick one or more job types, or enter a custom search.')
@@ -1522,7 +1520,7 @@ function App() {
 
   function handleOnboardingBack() {
     setOnboardingError('')
-    setOnboardingPage((prev) => Math.max(1, prev - 1))
+    setOnboardingPage((prev) => Math.max(2, prev - 1))
   }
 
   function toggleOnboardingJobOption(optionId) {
@@ -1838,92 +1836,15 @@ function App() {
               </div>
             </div>
             <ol className="onboarding-steps">
-              <li className={onboardingPage === 1 ? 'active' : onboardingStep > 1 ? 'done' : ''}>Create account</li>
               <li className={onboardingPage === 2 ? 'active' : onboardingStep > 2 ? 'done' : ''}>Upload resume</li>
               <li className={onboardingPage === 3 ? 'active' : onboardingStep > 3 ? 'done' : ''}>Select location</li>
               <li className={onboardingPage === 4 ? 'active' : onboardingStep > 4 ? 'done' : ''}>Pick job targets</li>
               <li className={onboardingPage === 5 ? 'active' : onboardingStep > 5 ? 'done' : ''}>Start search</li>
             </ol>
 
-            {onboardingPage === 1 ? (
-              <div className="onboarding-section onboarding-page">
-                <h3>1. Sign in securely</h3>
-                <p className="onboarding-meta">Create an account on this server or sign in with your existing email and password. Your resumes and bookmarks stay on the backend.</p>
-                {googleUser ? (
-                  <div className="onboarding-google-pill onboarding-account-pill">
-                    <span>{googleUser.name}{googleUser.email ? ` · ${googleUser.email}` : ''}</span>
-                    <button type="button" className="ghost-link" onClick={handleLogout}>Log out</button>
-                  </div>
-                ) : (
-                  <div className="onboarding-auth-card">
-                    <div className="onboarding-auth-toggle" role="tablist" aria-label="Authentication mode">
-                      <button
-                        type="button"
-                        className={authMode === 'register' ? 'active' : ''}
-                        onClick={() => setAuthMode('register')}
-                      >
-                        Create account
-                      </button>
-                      <button
-                        type="button"
-                        className={authMode === 'login' ? 'active' : ''}
-                        onClick={() => setAuthMode('login')}
-                      >
-                        Sign in
-                      </button>
-                    </div>
-                    <div className="onboarding-auth-grid">
-                      {authMode === 'register' ? (
-                        <label>
-                          <span>Name</span>
-                          <input
-                            type="text"
-                            value={authForm.name}
-                            onChange={(event) => handleAuthFieldChange('name', event.target.value)}
-                            placeholder="Your name"
-                            autoComplete="name"
-                          />
-                        </label>
-                      ) : null}
-                      <label>
-                        <span>Email</span>
-                        <input
-                          type="email"
-                          value={authForm.email}
-                          onChange={(event) => handleAuthFieldChange('email', event.target.value)}
-                          placeholder="you@example.com"
-                          autoComplete="email"
-                        />
-                      </label>
-                      <label>
-                        <span>Password</span>
-                        <input
-                          type="password"
-                          value={authForm.password}
-                          onChange={(event) => handleAuthFieldChange('password', event.target.value)}
-                          placeholder="At least 8 characters"
-                          autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
-                        />
-                      </label>
-                    </div>
-                    <div className="onboarding-auth-actions">
-                      <button
-                        type="button"
-                        onClick={() => submitAuthForm(authMode)}
-                        disabled={isAuthSubmitting || !authForm.email.trim() || !authForm.password || (authMode === 'register' && !authForm.name.trim())}
-                      >
-                        {isAuthSubmitting ? 'Submitting…' : authMode === 'register' ? 'Create account' : 'Sign in'}
-                      </button>
-                      <p>{authMode === 'register' ? 'We create your encrypted account on this server and keep your session in an HttpOnly cookie.' : 'Use the account you already created on this server.'}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : null}
-
             {onboardingPage === 2 ? (
               <div className="onboarding-section onboarding-page">
-                <h3>2. Upload resume</h3>
+                <h3>1. Upload resume</h3>
                 <p className="onboarding-meta">Upload one or more resumes. The selected resume will drive ranking and search quality.</p>
                 <label className="resume-upload-btn onboarding-upload-btn">
                   <span>Upload resume files</span>
@@ -2000,7 +1921,7 @@ function App() {
 
             {onboardingPage === 3 ? (
               <div className="onboarding-section onboarding-page">
-                <h3>3. Select location</h3>
+                <h3>2. Select location</h3>
                 <p className="onboarding-meta">Pick a location so proximity scoring can prioritize nearby roles. You can skip this and search everywhere.</p>
                 <div className="onboarding-location-pane">
                   <input
@@ -2067,7 +1988,7 @@ function App() {
 
             {onboardingPage === 4 ? (
               <div className="onboarding-section onboarding-page">
-                <h3>4. What jobs should we search for?</h3>
+                <h3>3. What jobs should we search for?</h3>
                 <p className="onboarding-meta">Choose any number of presets, then add your own search terms if you want something more specific.</p>
                 <div className="onboarding-job-grid onboarding-job-grid-wide">
                   {ONBOARDING_JOB_OPTIONS.map((option) => (
@@ -2095,7 +2016,7 @@ function App() {
 
             {onboardingPage === 5 ? (
               <div className="onboarding-section onboarding-page">
-                <h3>5. Start your search</h3>
+                <h3>4. Start your search</h3>
                 <p className="onboarding-meta">We’ll launch a search with your selected resume and the role focus below.</p>
                 <div className="onboarding-summary">
                   <p><strong>Signed in:</strong> {googleUser?.name || 'Not signed in'}</p>
