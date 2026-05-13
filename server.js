@@ -45,6 +45,8 @@ const AUTH_STORE_FILE = path.join(PRIVATE_DATA_DIR, 'app-data.enc');
 const AUTH_SECRET_FILE = path.join(PRIVATE_DATA_DIR, 'server-secret.key');
 const SESSION_COOKIE_NAME = 'job_finder_session';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
+const ANONYMOUS_COOKIE_NAME = 'job_finder_anon';
+const ANONYMOUS_RESUME_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const ATS_FETCH_CONCURRENCY = 12;
 const ATS_FETCH_TIMEOUT_MS = 8000;
 const INGEST_VOLUME_MULTIPLIER = Math.max(1, Math.min(10, Number(process.env.INGEST_VOLUME_MULTIPLIER || 4)));
@@ -100,6 +102,7 @@ const jobSearchCache = new Map();
 const requestProgressCache = new Map();
 const resumeProfileCache = new Map();
 const resumeBreakdownCache = new Map();
+const anonymousResumes = new Map(); // Maps anonUserId -> { text, uploadedAt, profile }
 let derivedScoreCacheDatasetKey = '';
 let companyEndProductCache = {
   datasetKey: '',
@@ -6392,6 +6395,47 @@ function requireAuthUser(req, res) {
   return user;
 }
 
+function getOrCreateAnonymousUser(req, res) {
+  const cookies = parseCookies(req);
+  let anonId = String(cookies[ANONYMOUS_COOKIE_NAME] || '').trim();
+  
+  if (!anonId) {
+    anonId = `anon-${Date.now().toString(36)}-${crypto.randomBytes(6).toString('hex')}`;
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
+    res.setHeader('Set-Cookie', `${ANONYMOUS_COOKIE_NAME}=${anonId}; Path=/; HttpOnly; Max-Age=31536000; Secure; SameSite=Lax`);
+  }
+  
+  return anonId;
+}
+
+function getAnonymousResumeForUser(anonUserId) {
+  const entry = anonymousResumes.get(anonUserId);
+  if (!entry) return null;
+  
+  const now = Date.now();
+  const expiresAt = entry.uploadedAt + ANONYMOUS_RESUME_TTL_MS;
+  
+  if (now > expiresAt) {
+    anonymousResumes.delete(anonUserId);
+    return null;
+  }
+  
+  return {
+    text: entry.text,
+    profile: entry.profile,
+    uploadedAt: entry.uploadedAt,
+    expiresAt,
+  };
+}
+
+function saveAnonymousResumeForUser(anonUserId, text, profile) {
+  anonymousResumes.set(anonUserId, {
+    text,
+    profile,
+    uploadedAt: Date.now(),
+  });
+}
+
 function consumeLegacyDataForUser(userId) {
   const currentData = getPrivateUserData(userId);
   if ((currentData.resumes || []).length > 0 || (currentData.bookmarks?.bookmarked || []).length > 0 || (currentData.bookmarks?.hidden || []).length > 0 || (currentData.bookmarks?.hiddenCompanies || []).length > 0) {
@@ -7686,17 +7730,27 @@ async function handleJobsApi(req, res, url) {
       res.end(JSON.stringify({ error: 'A selected resume is required' }));
       return;
     }
-    if (requiresResume && !hasBuiltInResume && !authUser) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Authentication required' }));
-      return;
-    }
+    
     let resumeKey, resumeProfile;
     if (hasBuiltInResume) {
       resumeKey = resumeId;
       resumeProfile = RESUME_PROFILES[resumeId];
     } else {
-      ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
+      // Try authenticated user first
+      if (authUser) {
+        ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
+      } else {
+        // Try anonymous user's resume
+        const anonUserId = getOrCreateAnonymousUser(req, res);
+        const anonResume = getAnonymousResumeForUser(anonUserId);
+        if (!anonResume) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Please upload a resume to continue' }));
+          return;
+        }
+        resumeKey = `anonymous:${anonUserId}`;
+        resumeProfile = anonResume.profile;
+      }
     }
     const limitParam = Number(url.searchParams.get('limit'));
     const offsetParam = Number(url.searchParams.get('offset'));
@@ -8612,22 +8666,20 @@ async function handleBookmarksActionApi(req, res) {
 }
 
 async function handleResumesApi(req, res) {
-  const authUser = requireAuthUser(req, res);
-  if (!authUser) return;
-  consumeLegacyDataForUser(authUser.id);
-  const resumeLibraryData = getResumeLibraryForUser(authUser.id);
+  const anonUserId = getOrCreateAnonymousUser(req, res);
 
   if (req.method === 'GET') {
+    const resumeData = getAnonymousResumeForUser(anonUserId);
+    const now = Date.now();
+    
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      uploadedResumes: (resumeLibraryData.resumes || []).map((resume) => ({
-        id: resume.id,
-        name: resume.name,
-        sourceName: resume.sourceName || 'Upload',
-        createdAt: resume.createdAt,
-        updatedAt: resume.updatedAt,
-        type: 'uploaded',
-      })),
+      resume: resumeData ? {
+        name: 'Current Resume',
+        uploadedAt: new Date(resumeData.uploadedAt).toISOString(),
+        expiresAt: new Date(resumeData.expiresAt).toISOString(),
+        expiresInMs: Math.max(0, resumeData.expiresAt - now),
+      } : null,
     }));
     return;
   }
@@ -8640,7 +8692,6 @@ async function handleResumesApi(req, res) {
       const bb = Busboy({ headers: req.headers });
       let fileName = '';
       let fileBuffer = Buffer.alloc(0);
-      let resumeName = '';
       let hasFile = false;
 
       bb.on('file', (fieldname, file, info) => {
@@ -8654,12 +8705,6 @@ async function handleResumesApi(req, res) {
           file.on('end', () => {
             fileBuffer = Buffer.concat(chunks);
           });
-        }
-      });
-
-      bb.on('field', (fieldname, val) => {
-        if (fieldname === 'name' || fieldname === 'resumeName') {
-          resumeName = String(val || '').trim();
         }
       });
 
@@ -8681,32 +8726,18 @@ async function handleResumesApi(req, res) {
             return;
           }
 
-          const name = buildProfileLabelFromText(normalizedText, resumeName || String(fileName || 'Uploaded Resume').replace(/\.[^.]+$/, '').trim() || 'Uploaded Resume');
-          const sourceName = String(fileName || 'Upload').trim() || 'Upload';
-          const baseId = slugify(name || sourceName || 'resume') || 'resume';
-          const id = `${baseId}-${Date.now().toString(36)}`;
-          const next = {
-            resumes: [...(resumeLibraryData.resumes || []), normalizeResumeRecord({
-              id,
-              name,
-              text: normalizedText,
-              sourceName,
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            })],
-          };
-          persistResumeLibraryForUser(authUser.id, next);
+          const profile = buildCustomResumeProfile(normalizedText, 'Current Resume');
+          saveAnonymousResumeForUser(anonUserId, normalizedText, profile);
 
+          const expiresAt = Date.now() + ANONYMOUS_RESUME_TTL_MS;
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({
             status: 'saved',
             resume: {
-              id,
-              name,
-              sourceName,
-              createdAt: next.resumes[next.resumes.length - 1].createdAt,
-              updatedAt: next.resumes[next.resumes.length - 1].updatedAt,
-              type: 'uploaded',
+              name: 'Current Resume',
+              uploadedAt: new Date().toISOString(),
+              expiresAt: new Date(expiresAt).toISOString(),
+              expiresInMs: ANONYMOUS_RESUME_TTL_MS,
             },
           }));
         } catch (err) {
@@ -8743,32 +8774,18 @@ async function handleResumesApi(req, res) {
           return;
         }
 
-        const name = buildProfileLabelFromText(text, String(payload.name || payload.fileName || 'Uploaded Resume').trim() || 'Uploaded Resume');
-        const sourceName = String(payload.fileName || payload.sourceName || 'Upload').trim() || 'Upload';
-        const baseId = slugify(name || sourceName || 'resume') || 'resume';
-        const id = `${baseId}-${Date.now().toString(36)}`;
-        const next = {
-          resumes: [...(resumeLibraryData.resumes || []), normalizeResumeRecord({
-            id,
-            name,
-            text,
-            sourceName,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })],
-        };
-        persistResumeLibraryForUser(authUser.id, next);
+        const profile = buildCustomResumeProfile(text, 'Current Resume');
+        saveAnonymousResumeForUser(anonUserId, text, profile);
 
+        const expiresAt = Date.now() + ANONYMOUS_RESUME_TTL_MS;
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           status: 'saved',
           resume: {
-            id,
-            name,
-            sourceName,
-            createdAt: next.resumes[next.resumes.length - 1].createdAt,
-            updatedAt: next.resumes[next.resumes.length - 1].updatedAt,
-            type: 'uploaded',
+            name: 'Current Resume',
+            uploadedAt: new Date().toISOString(),
+            expiresAt: new Date(expiresAt).toISOString(),
+            expiresInMs: ANONYMOUS_RESUME_TTL_MS,
           },
         }));
       } catch (err) {
@@ -8781,20 +8798,9 @@ async function handleResumesApi(req, res) {
   }
 
   if (req.method === 'DELETE') {
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const resumeId = String(url.searchParams.get('resumeId') || '').trim();
-    if (!resumeId) {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'resumeId is required' }));
-      return;
-    }
-
-    const next = {
-      resumes: (resumeLibraryData.resumes || []).filter((resume) => resume.id !== resumeId),
-    };
-    persistResumeLibraryForUser(authUser.id, next);
+    anonymousResumes.delete(anonUserId);
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'deleted', resumeId }));
+    res.end(JSON.stringify({ status: 'deleted' }));
     return;
   }
 
@@ -9055,17 +9061,27 @@ async function handleDistributionStatsApi(req, res, url) {
       res.end(JSON.stringify({ error: 'A selected resume is required' }));
       return;
     }
-    if (requiresResume && !hasBuiltInResume && !authUser) {
-      res.writeHead(401, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Authentication required' }));
-      return;
-    }
+    
     let resumeKey, resumeProfile;
     if (hasBuiltInResume) {
       resumeKey = builtInResumeIdParam;
       resumeProfile = RESUME_PROFILES[builtInResumeIdParam];
     } else {
-      ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
+      // Try authenticated user first
+      if (authUser) {
+        ({ resumeKey, profile: resumeProfile } = resolveResumeSelection(authUser?.id, resumeSelection));
+      } else {
+        // Try anonymous user's resume
+        const anonUserId = getOrCreateAnonymousUser(req, res);
+        const anonResume = getAnonymousResumeForUser(anonUserId);
+        if (!anonResume) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Please upload a resume to continue' }));
+          return;
+        }
+        resumeKey = `anonymous:${anonUserId}`;
+        resumeProfile = anonResume.profile;
+      }
     }
     const resumeId = Array.isArray(resumeSelection?.resumeIds) && resumeSelection.resumeIds.length > 0
       ? resumeSelection.resumeIds[0]
